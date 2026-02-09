@@ -2,7 +2,7 @@ import type { Track } from "../types";
 import { getInitData } from "./telegram";
 
 /**
- * API клиент с таймаутами и retry для работы через VPN/туннель.
+ * API клиент с таймаутами для работы через VPN/туннель.
  */
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -54,9 +54,7 @@ export const searchTracks = async (query: string): Promise<Track[]> => {
     12000,
   );
 
-  if (!response.ok) {
-    throw new Error(`Search failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Search failed: ${response.status}`);
 
   const data = await response.json();
   const items = Array.isArray(data) ? data : (data.items ?? data.tracks ?? data.results ?? []);
@@ -65,7 +63,53 @@ export const searchTracks = async (query: string): Promise<Track[]> => {
     .filter((t) => t.id.length > 0);
 };
 
-/** URL для стриминга MP3 */
+// ─── Audio URL resolution ─────────────────────────────────────
+
+/** Кеш resolved URL (track_id → { url, ts }) */
+const _urlCache = new Map<string, { url: string; ts: number }>();
+const _URL_TTL = 5 * 60_000; // 5 мин
+
+/**
+ * Получает прямой VK CDN URL через бэкенд /resolve.
+ * Клиент потом грузит аудио напрямую с VK — без прокси через туннель.
+ */
+export const resolveAudioUrl = async (trackId: string): Promise<string> => {
+  // Проверяем кеш
+  const cached = _urlCache.get(trackId);
+  if (cached && Date.now() - cached.ts < _URL_TTL) return cached.url;
+
+  // Запрос к бэкенду (маленький JSON, ~200 байт через туннель)
+  const resp = await fetchWithTimeout(
+    `${API_BASE}/api/music/resolve/${encodeURIComponent(trackId)}`,
+    { method: "GET", headers: { Accept: "application/json" } },
+    8000,
+  );
+
+  if (!resp.ok) throw new Error(`Resolve failed: ${resp.status}`);
+  const data = await resp.json();
+  const url: string = data.url;
+
+  // Если HLS — fallback на наш прокси (ffmpeg нужен)
+  if (data.hls) {
+    const proxyUrl = `${API_BASE}/api/music/download/${encodeURIComponent(trackId)}`;
+    _urlCache.set(trackId, { url: proxyUrl, ts: Date.now() });
+    return proxyUrl;
+  }
+
+  _urlCache.set(trackId, { url, ts: Date.now() });
+  return url;
+};
+
+/**
+ * Предзагружает URL следующего/предыдущего трека в кеш.
+ * Вызывается при начале воспроизведения текущего трека.
+ */
+export const preloadTrackUrl = (trackId: string) => {
+  if (_urlCache.has(trackId)) return; // уже в кеше
+  resolveAudioUrl(trackId).catch(() => {}); // fire & forget
+};
+
+/** Fallback URL через прокси (для обратной совместимости) */
 export const getDownloadUrl = (id: string) =>
   `${API_BASE}/api/music/download/${encodeURIComponent(id)}`;
 
@@ -134,7 +178,7 @@ export const sendToBot = async (trackId: string): Promise<boolean> => {
     const resp = await fetchWithTimeout(
       `${API_BASE}/api/send-to-bot/${encodeURIComponent(trackId)}`,
       { method: "POST", headers: authHeaders() },
-      60000,  // Долгий таймаут — ffmpeg конвертация + отправка
+      60000,
     );
     return resp.ok;
   } catch { return false; }

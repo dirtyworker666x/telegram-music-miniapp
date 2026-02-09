@@ -13,9 +13,10 @@ import { useTelegramTheme } from "./hooks/useTelegramTheme";
 import {
   addToPlaylist,
   fetchPlaylist,
-  getDownloadUrl,
   loginTelegram,
+  preloadTrackUrl,
   removeFromPlaylist,
+  resolveAudioUrl,
   searchTracks,
   sendToBot,
 } from "./lib/api";
@@ -95,7 +96,6 @@ const App = () => {
     bufferingRef.current = true;
 
     setCurrentTrack(track);
-    setAudioUrl(getDownloadUrl(track.id));
     setIsPlayerOpen(true);
     setIsPlaying(true);
     setIsBuffering(true);
@@ -109,6 +109,15 @@ const App = () => {
       if (track.artwork) artwork.push({ src: track.artwork, sizes: "256x256", type: "image/jpeg" });
       navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: "TGPlayer", artwork });
     }
+
+    // Resolve прямой VK CDN URL (маленький запрос через туннель)
+    // Затем audio.src = VK CDN напрямую — минуя туннель для аудио данных
+    resolveAudioUrl(track.id)
+      .then((directUrl) => setAudioUrl(directUrl))
+      .catch(() => {
+        // Fallback: прокси через бэкенд если resolve не сработал
+        setAudioUrl(`${import.meta.env.VITE_API_BASE ?? "http://localhost:8000"}/api/music/download/${encodeURIComponent(track.id)}`);
+      });
   }, []);
 
   const handleNext = useCallback(() => {
@@ -122,6 +131,15 @@ const App = () => {
   }, [queue, currentIndex, playTrack]);
 
   useEffect(() => { handleNextRef.current = handleNext; }, [handleNext]);
+
+  // ─── Preload соседних треков (resolve URL в кеш) ─────────────────
+  useEffect(() => {
+    if (queue.length === 0 || currentIndex === -1) return;
+    const nextIdx = (currentIndex + 1) % queue.length;
+    const prevIdx = (currentIndex - 1 + queue.length) % queue.length;
+    preloadTrackUrl(queue[nextIdx].id);
+    if (prevIdx !== nextIdx) preloadTrackUrl(queue[prevIdx].id);
+  }, [queue, currentIndex]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;

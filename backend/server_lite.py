@@ -88,7 +88,7 @@ if not FFMPEG:
 import aiohttp
 from fastapi import FastAPI, Query, Path as Param, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, RedirectResponse
 
 app = FastAPI(title="TGPlayer Lite API", docs_url="/docs", redoc_url=None)
 
@@ -411,22 +411,24 @@ async def search(
     )
 
 
-async def _proxy_audio_stream(source_url: str):
-    """Проксирует прямой MP3 без ffmpeg — мгновенный старт воспроизведения."""
-    session = await get_session()
-    try:
-        async with session.get(source_url, headers={"User-Agent": VK_USER_AGENT}) as resp:
-            if resp.status != 200:
-                return
-            async for chunk in resp.content.iter_chunked(32 * 1024):
-                yield chunk
-    except Exception as e:
-        print(f"⚠️ Proxy stream error: {e}")
+@app.get("/api/music/resolve/{track_id}")
+async def resolve_url(track_id: str = Param(...)):
+    """Возвращает прямой VK CDN URL. Клиент грузит аудио напрямую — без прокси."""
+    if not re.match(r"^-?\d+_\d+$", track_id):
+        raise HTTPException(400, "Invalid track ID format")
+    url = await vk_get_audio_url(track_id)
+    if not url:
+        raise HTTPException(404, "Track not found or restricted")
+    return Response(
+        content=json.dumps({"url": url, "hls": _is_hls_url(url)}),
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=120"},
+    )
 
 
 @app.get("/api/music/download/{track_id}")
 async def download(track_id: str = Param(...)):
-    """Стримит MP3. Прямой proxy для MP3, ffmpeg только для HLS."""
+    """302 redirect на VK CDN для прямых MP3. ffmpeg только для HLS."""
     if not re.match(r"^-?\d+_\d+$", track_id):
         raise HTTPException(400, "Invalid track ID format")
 
@@ -434,26 +436,19 @@ async def download(track_id: str = Param(...)):
     if not url:
         raise HTTPException(404, "Track not found or restricted")
 
-    common_headers = {
-        "Cache-Control": "public, max-age=300",
-        "Accept-Ranges": "none",
-        "Content-Disposition": f'inline; filename="{track_id}.mp3"',
-        "Transfer-Encoding": "chunked",
-    }
-
-    # Прямой MP3 → proxy без ffmpeg (мгновенный старт!)
+    # Прямой MP3 → 302 redirect (аудио минует туннель полностью!)
     if not _is_hls_url(url):
-        return StreamingResponse(
-            _proxy_audio_stream(url),
-            media_type="audio/mpeg",
-            headers=common_headers,
-        )
+        return RedirectResponse(url, status_code=302)
 
-    # HLS → ffmpeg transcode
+    # HLS → ffmpeg transcode (единственный случай когда нужен прокси)
     return StreamingResponse(
         ffmpeg_stream_mp3(url),
         media_type="audio/mpeg",
-        headers=common_headers,
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "Accept-Ranges": "none",
+            "Transfer-Encoding": "chunked",
+        },
     )
 
 
