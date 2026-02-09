@@ -25,11 +25,36 @@ const normalizeTrack = (raw: Record<string, unknown>): Track => {
   };
 };
 
-/** Fetch с таймаутом — не виснет при медленном VPN */
-const fetchWithTimeout = (url: string, opts: RequestInit = {}, timeoutMs = 15000) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+/** Fetch с таймаутом и retry при 503 — не виснет при медленном VPN */
+const fetchWithTimeout = async (
+  url: string,
+  opts: RequestInit = {},
+  timeoutMs = 18000,
+  retries = 2,
+): Promise<Response> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, { ...opts, signal: controller.signal });
+      clearTimeout(timer);
+      // Retry при 503 (tunnel overload)
+      if (resp.status === 503 && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  // fallback — не должен достигаться
+  throw new Error("Request failed after retries");
 };
 
 const authHeaders = (): Record<string, string> => {
@@ -51,7 +76,8 @@ export const searchTracks = async (query: string): Promise<Track[]> => {
   const response = await fetchWithTimeout(
     `${API_BASE}/api/music/search?q=${encodeURIComponent(trimmed)}`,
     { method: "GET", headers: { Accept: "application/json" } },
-    12000,
+    18000,
+    2, // retry 503
   );
 
   if (!response.ok) throw new Error(`Search failed: ${response.status}`);
@@ -67,7 +93,7 @@ export const searchTracks = async (query: string): Promise<Track[]> => {
 
 /** Кеш resolved URL (track_id → { url, ts }) */
 const _urlCache = new Map<string, { url: string; ts: number }>();
-const _URL_TTL = 5 * 60_000; // 5 мин
+const _URL_TTL = 20 * 60_000; // 20 мин
 
 /**
  * Получает прямой VK CDN URL через бэкенд /resolve.
@@ -82,7 +108,8 @@ export const resolveAudioUrl = async (trackId: string): Promise<string> => {
   const resp = await fetchWithTimeout(
     `${API_BASE}/api/music/resolve/${encodeURIComponent(trackId)}`,
     { method: "GET", headers: { Accept: "application/json" } },
-    8000,
+    12000,
+    2, // retry 503
   );
 
   if (!resp.ok) throw new Error(`Resolve failed: ${resp.status}`);
@@ -101,12 +128,23 @@ export const resolveAudioUrl = async (trackId: string): Promise<string> => {
 };
 
 /**
- * Предзагружает URL следующего/предыдущего трека в кеш.
- * Вызывается при начале воспроизведения текущего трека.
+ * Предзагружает URL трека в кеш (fire & forget).
  */
 export const preloadTrackUrl = (trackId: string) => {
-  if (_urlCache.has(trackId)) return; // уже в кеше
-  resolveAudioUrl(trackId).catch(() => {}); // fire & forget
+  if (_urlCache.has(trackId)) return;
+  resolveAudioUrl(trackId).catch(() => {});
+};
+
+/**
+ * Предзагружает URLs пачки треков (первые N из поисковой выдачи).
+ * Вызывается сразу после получения результатов поиска.
+ */
+export const preloadBatchUrls = (trackIds: string[]) => {
+  for (const id of trackIds) {
+    if (!_urlCache.has(id)) {
+      resolveAudioUrl(id).catch(() => {});
+    }
+  }
 };
 
 /** Fallback URL через прокси (для обратной совместимости) */

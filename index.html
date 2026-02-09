@@ -10,7 +10,14 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <title>TGPlayer — Telegram Mini App</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Preconnect к VK CDN — убирает 200-500ms на DNS+TLS при загрузке обложек и аудио -->
+    <link rel="preconnect" href="https://sun9-44.userapi.com" crossorigin />
+    <link rel="preconnect" href="https://sun9-80.userapi.com" crossorigin />
+    <link rel="preconnect" href="https://psv4.vkuseraudio.net" crossorigin />
+    <link rel="dns-prefetch" href="https://sun9-44.userapi.com" />
+    <link rel="dns-prefetch" href="https://sun9-80.userapi.com" />
+    <link rel="dns-prefetch" href="https://psv4.vkuseraudio.net" />
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Bookmark, ChevronDown, Loader2, Pause, Play, Send, SkipBack, SkipForward } from "lucide-react";
+import { useCallback, useState } from "react";
 import type { Track } from "../types";
 import { formatTime } from "../lib/format";
+import { WaveformSeekBar } from "./WaveformSeekBar";
 
 type FullPlayerProps = {
   isOpen: boolean;
@@ -36,6 +38,25 @@ export const FullPlayer = ({
   onSendToBot,
   isLoggedIn,
 }: FullPlayerProps) => {
+  const [dragging, setDragging] = useState(false);
+  const [dragTime, setDragTime] = useState(0);
+  const displayTime = dragging ? dragTime : currentTime;
+
+  const onWaveSeekStart = useCallback(() => {
+    setDragging(true);
+    setDragTime(currentTime);
+  }, [currentTime]);
+
+  const onWaveSeekMove = useCallback((time: number) => {
+    setDragTime(time);
+  }, []);
+
+  const onWaveSeekEnd = useCallback((time: number) => {
+    setDragging(false);
+    setDragTime(time);
+    onSeek(time);
+  }, [onSeek]);
+
   if (!track) return null;
 
   return (
@@ -101,19 +122,18 @@ export const FullPlayer = ({
 
               {/* Controls area — fixed at bottom */}
               <div className="space-y-3 shrink-0">
-                {/* Seek bar */}
+                {/* SoundCloud-style waveform seek bar */}
                 <div className="space-y-1">
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(duration, 1)}
-                    step={0.1}
-                    value={Math.min(currentTime, duration || Infinity)}
-                    onChange={(event) => onSeek(Number(event.target.value))}
-                    className="w-full"
+                  <WaveformSeekBar
+                    trackId={track.id}
+                    currentTime={displayTime}
+                    duration={duration}
+                    onSeekStart={onWaveSeekStart}
+                    onSeekMove={onWaveSeekMove}
+                    onSeekEnd={onWaveSeekEnd}
                   />
                   <div className="flex items-center justify-between text-[11px] text-white/40 font-medium">
-                    <span>{formatTime(Math.min(currentTime, duration || Infinity))}</span>
+                    <span>{formatTime(Math.min(displayTime, duration || Infinity))}</span>
                     <span>{formatTime(duration)}</span>
                   </div>
                 </div>

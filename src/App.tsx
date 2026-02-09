@@ -14,6 +14,7 @@ import {
   addToPlaylist,
   fetchPlaylist,
   loginTelegram,
+  preloadBatchUrls,
   preloadTrackUrl,
   removeFromPlaylist,
   resolveAudioUrl,
@@ -24,6 +25,7 @@ import { getTelegramUser } from "./lib/telegram";
 import type { Track } from "./types";
 
 type TgUser = { id: number; first_name: string; username?: string } | null;
+const MAX_VISIBLE = 20;
 
 const App = () => {
   useTelegramTheme();
@@ -44,13 +46,15 @@ const App = () => {
   const [isBuffering, setIsBuffering] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [showAll, setShowAll] = useState(false);
 
   // ─── Refs для доступа из audio event handlers (useEffect []) ────
   const bufferingRef = useRef(false);       // true = загрузка/смена трека
   const userPausedRef = useRef(false);      // true = пользователь нажал паузу
+  const seekingRef = useRef(false);         // true = пользователь тянет ползунок
   const handleNextRef = useRef<() => void>(() => {});
 
-  const debouncedQuery = useDebouncedValue(query, 400);
+  const debouncedQuery = useDebouncedValue(query, 300);
 
   // ─── Search ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -64,7 +68,12 @@ const App = () => {
         const results = await searchTracks(debouncedQuery);
         if (!active) return;
         setTracks(results);
+        setShowAll(false);
         if (results.length === 0) setError("Ничего не найдено.");
+        // Предзагружаем audio URLs первых 5 треков — клик будет мгновенным
+        if (results.length > 0) {
+          preloadBatchUrls(results.slice(0, 5).map((t) => t.id));
+        }
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : "Ошибка поиска");
@@ -89,6 +98,7 @@ const App = () => {
   // ─── Queue ───────────────────────────────────────────────────────
   const queue = useMemo(() => tracks.length > 0 ? tracks : playlist.length > 0 ? playlist : [], [tracks, playlist]);
   const currentIndex = useMemo(() => currentTrack ? queue.findIndex((t) => t.id === currentTrack.id) : -1, [queue, currentTrack]);
+  const visibleTracks = useMemo(() => showAll ? tracks : tracks.slice(0, MAX_VISIBLE), [tracks, showAll]);
 
   // ─── Play track ──────────────────────────────────────────────────
   const playTrack = useCallback((track: Track) => {
@@ -157,8 +167,12 @@ const App = () => {
   const handleSeek = useCallback((value: number) => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.currentTime = value;
+    seekingRef.current = true;
     setCurrentTime(value);
+    audio.currentTime = value;
+    const unlock = () => { seekingRef.current = false; };
+    audio.addEventListener("seeked", unlock, { once: true });
+    setTimeout(unlock, 500);
   }, []);
 
   // ─── Playlist actions ────────────────────────────────────────────
@@ -198,8 +212,8 @@ const App = () => {
     if (!audio) return;
 
     const onTimeUpdate = () => {
-      // Не обновляем таймер во время буферизации/смены трека
-      if (bufferingRef.current) return;
+      // Не обновляем таймер во время буферизации/смены трека/seek
+      if (bufferingRef.current || seekingRef.current) return;
       setCurrentTime(audio.currentTime);
     };
 
@@ -313,7 +327,12 @@ const App = () => {
       <section className="space-y-4">
         {loading ? <LoadingState /> : null}
         {error ? <ErrorState message={error} /> : null}
-        <TrackList title="Результаты поиска" tracks={tracks} onSelect={playTrack} onAdd={handleAdd} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
+        <TrackList title="Результаты поиска" tracks={visibleTracks} onSelect={playTrack} onAdd={handleAdd} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
+        {tracks.length > MAX_VISIBLE && !showAll && (
+          <button className="w-full py-2 text-[13px] font-medium text-accent rounded-xl glass active:opacity-70" onClick={() => setShowAll(true)} type="button">
+            Показать ещё {tracks.length - MAX_VISIBLE} треков
+          </button>
+        )}
       </section>
 
       {isLoggedIn && (
@@ -324,7 +343,7 @@ const App = () => {
 
       <FullPlayer isOpen={isPlayerOpen} track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} currentTime={currentTime} duration={duration} onClose={() => setIsPlayerOpen(false)} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onSeek={handleSeek} onSaveToPlaylist={handleAdd} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
 
-      <audio ref={audioRef} preload="auto" />
+      <audio ref={audioRef} preload="auto" playsInline />
     </div>
   );
 };

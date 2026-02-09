@@ -24,6 +24,7 @@ export const TrackRow = ({ track, onSelect, onAdd, onRemove, onSendToBot, isLogg
             alt={`${track.title} cover`}
             className="h-full w-full object-cover"
             loading="lazy"
+            decoding="async"
           />
         ) : (
           <Music2 className="h-5 w-5 text-white/90" />

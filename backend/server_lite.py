@@ -37,7 +37,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 # ─── Кеш VK audio URL (track_id → (url, timestamp)) ─────────────
 _url_cache: Dict[str, tuple] = {}
-_URL_TTL = 600  # 10 минут
+_URL_TTL = 1500  # 25 минут
 
 def _cache_get(track_id: str) -> Optional[str]:
     entry = _url_cache.get(track_id)
@@ -99,7 +99,14 @@ async def get_session() -> aiohttp.ClientSession:
     global _http_session
     if _http_session is None or _http_session.closed:
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300, enable_cleanup_closed=True)
+        connector = aiohttp.TCPConnector(
+            limit=100,                   # 100 параллельных соединений к VK
+            limit_per_host=30,           # Макс 30 на один хост
+            ttl_dns_cache=300,
+            enable_cleanup_closed=True,
+            force_close=False,
+            keepalive_timeout=60,
+        )
         _http_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     return _http_session
 
@@ -391,8 +398,8 @@ async def ffmpeg_stream_mp3(source_url: str):
 
 # ─── Routes ──────────────────────────────────────────────────────
 
-@app.get("/")
-async def root():
+@app.get("/api/status")
+async def api_status():
     return {"status": "online", "message": "TGPlayer Lite API"}
 
 
@@ -404,11 +411,29 @@ async def search(
     if not q.strip():
         raise HTTPException(400, "Empty query")
     tracks = await vk_audio_search(q.strip(), limit=limit)
+
+    # Pre-resolve audio URLs для первых 5 треков (в фоне, кешируем)
+    # Клиент получит их мгновенно при клике
+    if tracks:
+        top_ids = [t["id"] for t in tracks[:5]]
+        asyncio.ensure_future(_batch_presolve(top_ids))
+
     return Response(
         content=json.dumps({"items": tracks}, ensure_ascii=False),
         media_type="application/json",
-        headers={"Cache-Control": "public, max-age=60"},  # Кеш поиска 1 мин
+        headers={"Cache-Control": "public, max-age=60"},
     )
+
+
+async def _batch_presolve(track_ids: List[str]):
+    """Фоновая предзагрузка audio URLs в кеш для быстрого resolve."""
+    try:
+        await asyncio.gather(
+            *[vk_get_audio_url(tid) for tid in track_ids],
+            return_exceptions=True,
+        )
+    except Exception:
+        pass
 
 
 @app.get("/api/music/resolve/{track_id}")
@@ -689,8 +714,54 @@ async def health():
     return {"status": "ok", "cache_size": len(_url_cache)}
 
 
+# ─── Статика: раздаём собранный фронтенд (dist/) напрямую ─────
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+DIST_DIR = Path(__file__).parent.parent / "dist"
+_static_dir = Path(__file__).parent / "static"
+_front = DIST_DIR if DIST_DIR.is_dir() else (_static_dir if _static_dir.is_dir() else None)
+
+if _front:
+    _index = _front / "index.html"
+
+    # Раздаём /assets/* как статику (JS, CSS, изображения)
+    _assets = _front / "assets"
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+
+    # Корень и все остальные пути → index.html (SPA fallback)
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(str(_index), media_type="text/html")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        # Если файл существует в dist — отдаём его
+        file_path = _front / path
+        if file_path.is_file() and ".." not in path:
+            return FileResponse(str(file_path))
+        # Иначе SPA fallback
+        return FileResponse(str(_index), media_type="text/html")
+
+    print(f"📁 Serving frontend from {_front}")
+else:
+    print(f"⚠️  dist/ не найдена. Запусти: npm run build")
+
+
 if __name__ == "__main__":
     import uvicorn
     print(f"🎵 TGPlayer Lite API on http://0.0.0.0:{PORT}")
     print(f"📖 Docs: http://127.0.0.1:{PORT}/docs")
-    uvicorn.run(app, host="0.0.0.0", port=PORT, timeout_keep_alive=120)
+    print(f"👥 Max concurrent: 200 | Keep-alive: 120s")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        timeout_keep_alive=120,     # Держим соединения дольше
+        limit_concurrency=200,      # 200 одновременных запросов
+        limit_max_requests=10000,   # Рестарт worker после 10k запросов (утечки памяти)
+        backlog=256,                # Большая очередь входящих
+        access_log=False,           # Отключаем access log для скорости
+    )

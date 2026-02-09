@@ -8,6 +8,10 @@ backend/.env
 # Build output
 dist/
 build/
+backend/static/
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
 
 # Python
 __pycache__/
