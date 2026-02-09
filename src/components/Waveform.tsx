@@ -30,7 +30,6 @@ export const Waveform = ({ url, audioRef }: WaveformProps) => {
       backend: "MediaElement",
       media: audioRef.current,
       normalize: true,
-      responsive: true
     });
 
     waveSurfer.load(url);
