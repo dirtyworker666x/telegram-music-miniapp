@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState, memo } from "react";
+import { formatTime } from "../lib/format";
 
 /**
- * SoundCloud-style waveform seek bar.
- *
- * Generates a deterministic waveform from the track ID (instant, no network cost)
- * and draws it on a <canvas> with played/unplayed bar coloring.
- * Supports touch + mouse dragging for seeking.
+ * SoundCloud-style: одна непрерывная дорожка на всю ширину, проходит сзади таймера.
+ * Таймер по центру поверх дорожки. Фиксированное число баров — без «больших кусков».
  */
 
 type WaveformSeekBarProps = {
@@ -18,16 +16,18 @@ type WaveformSeekBarProps = {
 };
 
 const BAR_COUNT = 80;
-const BAR_WIDTH = 2.5;
-const BAR_GAP = 1.5;
 const BAR_MIN = 0.08;
 const BAR_MAX = 1.0;
-const CANVAS_HEIGHT = 48;
+const CANVAS_HEIGHT = 80;
+const BAR_WIDTH_RATIO = 0.6; // ширина бара от слота (остальное — зазор)
+// Наши цвета: верх баров
 const PLAYED_COLOR = "rgba(0, 136, 204, 1)";
 const PLAYED_COLOR_TOP = "rgba(84, 169, 235, 0.9)";
 const UNPLAYED_COLOR = "rgba(255, 255, 255, 0.25)";
 const UNPLAYED_COLOR_TOP = "rgba(255, 255, 255, 0.15)";
-const CURSOR_COLOR = "rgba(255, 255, 255, 0.9)";
+// Затемнённая нижняя половина (как у SoundCloud)
+const PLAYED_COLOR_BOTTOM = "rgba(0, 85, 150, 0.95)";
+const UNPLAYED_COLOR_BOTTOM = "rgba(255, 255, 255, 0.08)";
 
 // ─── Deterministic waveform generation ────────────────────────
 
@@ -102,7 +102,7 @@ function getWaveform(trackId: string): Float32Array {
   return wf;
 }
 
-// ─── Drawing ──────────────────────────────────────────────────
+// ─── Drawing: одна дорожка на всю ширину, линия прогресса — граница цветов, таймер поверх ───
 
 function drawWaveform(
   ctx: CanvasRenderingContext2D,
@@ -112,80 +112,49 @@ function drawWaveform(
   height: number,
   dpr: number,
 ) {
-  ctx.clearRect(0, 0, width * dpr, height * dpr);
+  const W = Math.round(width * dpr);
+  const H = Math.round(height * dpr);
+  ctx.clearRect(0, 0, W, H);
 
-  const totalBarWidth = BAR_WIDTH + BAR_GAP;
-  const startX = (width * dpr - BAR_COUNT * totalBarWidth * dpr) / 2;
-  const progressX = startX + progress * BAR_COUNT * totalBarWidth * dpr;
+  const slotW = W / BAR_COUNT;
+  const barW = Math.max(1, Math.floor(slotW * BAR_WIDTH_RATIO));
+  const progressX = progress * W;
 
+  const drawBar = (
+    fromX: number, fromW: number, amp: number,
+    topColor: "played" | "unplayed", bottomColor: "played" | "unplayed",
+  ) => {
+    const barH = Math.max(4, Math.round(amp * (H - 6)));
+    const y = Math.floor((H - barH) / 2);
+    const topHalfH = Math.floor(barH / 2);
+    const bottomHalfH = barH - topHalfH;
+    const ix = Math.round(fromX);
+    const iw = Math.max(1, Math.round(fromW));
+    const gradTop = ctx.createLinearGradient(ix, y, ix, y + topHalfH);
+    gradTop.addColorStop(0, topColor === "played" ? PLAYED_COLOR_TOP : UNPLAYED_COLOR_TOP);
+    gradTop.addColorStop(1, topColor === "played" ? PLAYED_COLOR : UNPLAYED_COLOR);
+    ctx.fillStyle = gradTop;
+    ctx.fillRect(ix, y, iw, topHalfH);
+    ctx.fillStyle = bottomColor === "played" ? PLAYED_COLOR_BOTTOM : UNPLAYED_COLOR_BOTTOM;
+    ctx.fillRect(ix, y + topHalfH, iw, bottomHalfH);
+  };
+
+  // Все бары по всей ширине (включая под таймер) — линия прогресса делит на проиграно/не проиграно
   for (let i = 0; i < BAR_COUNT; i++) {
+    const x = i * slotW;
+    const barRight = x + barW;
     const amp = waveform[i];
-    const barH = Math.max(2 * dpr, amp * (height - 4) * dpr);
-    const x = startX + i * totalBarWidth * dpr;
-    const y = (height * dpr - barH) / 2;
-    const w = BAR_WIDTH * dpr;
-    const r = Math.min(w / 2, 2 * dpr);
-
-    const isPlayed = x + w <= progressX;
-    const isPartial = x < progressX && x + w > progressX;
-
-    if (isPlayed) {
-      // Gradient for played bars
-      const grad = ctx.createLinearGradient(x, y, x, y + barH);
-      grad.addColorStop(0, PLAYED_COLOR_TOP);
-      grad.addColorStop(1, PLAYED_COLOR);
-      ctx.fillStyle = grad;
-      roundedRect(ctx, x, y, w, barH, r);
-      ctx.fill();
-    } else if (isPartial) {
-      // Split bar: played part + unplayed part
-      const playedW = progressX - x;
-      // Played portion
-      const grad = ctx.createLinearGradient(x, y, x, y + barH);
-      grad.addColorStop(0, PLAYED_COLOR_TOP);
-      grad.addColorStop(1, PLAYED_COLOR);
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, playedW, barH);
-      // Unplayed portion
-      const grad2 = ctx.createLinearGradient(x, y, x, y + barH);
-      grad2.addColorStop(0, UNPLAYED_COLOR_TOP);
-      grad2.addColorStop(1, UNPLAYED_COLOR);
-      ctx.fillStyle = grad2;
-      ctx.fillRect(progressX, y, w - playedW, barH);
+    if (barRight <= progressX) {
+      drawBar(x, barW, amp, "played", "played");
+    } else if (x >= progressX) {
+      drawBar(x, barW, amp, "unplayed", "unplayed");
     } else {
-      // Unplayed
-      const grad = ctx.createLinearGradient(x, y, x, y + barH);
-      grad.addColorStop(0, UNPLAYED_COLOR_TOP);
-      grad.addColorStop(1, UNPLAYED_COLOR);
-      ctx.fillStyle = grad;
-      roundedRect(ctx, x, y, w, barH, r);
-      ctx.fill();
+      const playedW = progressX - x;
+      if (playedW >= 1) drawBar(x, playedW, amp, "played", "played");
+      const unplayedW = barRight - progressX;
+      if (unplayedW >= 1) drawBar(progressX, unplayedW, amp, "unplayed", "unplayed");
     }
   }
-
-  // Cursor line
-  if (progress > 0 && progress < 1) {
-    ctx.fillStyle = CURSOR_COLOR;
-    const cursorX = progressX - dpr;
-    ctx.fillRect(cursorX, 2 * dpr, 2 * dpr, (height - 4) * dpr);
-  }
-}
-
-function roundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number, w: number, h: number, r: number,
-) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
 }
 
 // ─── Component ────────────────────────────────────────────────
@@ -228,8 +197,10 @@ export const WaveformSeekBar = memo(({
     const w = rect.width;
     const h = CANVAS_HEIGHT;
 
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
+    const cw = Math.round(w * dpr);
+    const ch = Math.round(h * dpr);
+    canvas.width = cw;
+    canvas.height = ch;
     canvas.style.width = `${w}px`;
     canvas.style.height = `${h}px`;
 
@@ -242,14 +213,8 @@ export const WaveformSeekBar = memo(({
     const container = containerRef.current;
     if (!container) return 0;
     const rect = container.getBoundingClientRect();
-
-    // Calculate bar area bounds
-    const totalBarWidth = BAR_WIDTH + BAR_GAP;
-    const barsWidth = BAR_COUNT * totalBarWidth;
-    const startX = (rect.width - barsWidth) / 2;
-
-    const x = clientX - rect.left - startX;
-    return Math.min(Math.max(x / barsWidth, 0), 1);
+    const x = clientX - rect.left;
+    return Math.min(Math.max(x / rect.width, 0), 1);
   }, []);
 
   const handleStart = useCallback((clientX: number) => {
@@ -319,6 +284,8 @@ export const WaveformSeekBar = memo(({
     };
   }, []);
 
+  const timeAtCursor = duration > 0 ? Math.min(progress * duration, duration) : 0;
+
   return (
     <div
       ref={containerRef}
@@ -334,6 +301,14 @@ export const WaveformSeekBar = memo(({
         className="absolute inset-0"
         style={{ width: "100%", height: CANVAS_HEIGHT }}
       />
+      {/* Прямоугольник времени по центру (как в SoundCloud) */}
+      <div
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-black/90 text-[11px] font-semibold"
+      >
+        <span style={{ color: "rgb(84, 169, 235)" }}>{formatTime(timeAtCursor)}</span>
+        <span className="text-white/50">/</span>
+        <span className="text-white/90">{formatTime(duration)}</span>
+      </div>
     </div>
   );
 });

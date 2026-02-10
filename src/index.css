@@ -80,15 +80,101 @@ body {
 #root {
   height: 100%;
   height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Единственный скролл — список треков. Полоса в коде, но прозрачная; если WebView не применит — уезжает за край. */
+.app-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  -ms-overflow-style: none;
+  padding-right: 17px;
+  margin-right: -17px;
+  width: calc(100% + 17px);
+  box-sizing: border-box;
+}
+.app-scroll::-webkit-scrollbar {
+  width: 8px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.app-scroll::-webkit-scrollbar-track {
+  background: transparent !important;
+  -webkit-appearance: none;
+}
+.app-scroll::-webkit-scrollbar-thumb {
+  background: transparent !important;
+  border: none !important;
+  -webkit-appearance: none;
+  border-radius: 4px;
+}
+.app-scroll::-webkit-scrollbar-thumb:hover,
+.app-scroll::-webkit-scrollbar-thumb:active {
+  background: transparent !important;
+}
+.app-scroll::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+.app-scroll::-webkit-scrollbar-button {
+  display: none;
+  background: transparent !important;
+}
+
+/* Прозрачная полоса у любых других скроллов (html, body, #root, дочерние блоки). */
+html, body, #root {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  -ms-overflow-style: none;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+#root::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+#root::-webkit-scrollbar-thumb {
+  background: transparent !important;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent !important;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent !important;
 }
 
 .glass {
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
+}
+
+/* Секции в стиле карточного layout — только структура, цвета из :root */
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
 }
 
 .dark .glass {

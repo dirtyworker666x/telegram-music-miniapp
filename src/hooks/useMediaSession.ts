@@ -15,21 +15,23 @@ export const useMediaSession = (
   duration?: number,
   currentTime?: number,
 ) => {
-  // Метаданные трека
+  // Метаданные трека (обложка или иконка приложения на заблокированном экране)
   useEffect(() => {
     if (!("mediaSession" in navigator) || !track) return;
     const artwork: MediaImage[] = [];
-    if (track.artwork) {
+    const artSrc = track.artwork || (typeof window !== "undefined" ? `${window.location.origin}/icon-track.png` : "");
+    if (artSrc) {
+      const type = track.artwork ? "image/jpeg" : "image/png";
       artwork.push(
-        { src: track.artwork, sizes: "96x96", type: "image/jpeg" },
-        { src: track.artwork, sizes: "256x256", type: "image/jpeg" },
-        { src: track.artwork, sizes: "512x512", type: "image/jpeg" },
+        { src: artSrc, sizes: "96x96", type },
+        { src: artSrc, sizes: "256x256", type },
+        { src: artSrc, sizes: "512x512", type },
       );
     }
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist,
-      album: "TGPlayer",
+      album: "TGPlay",
       artwork,
     });
   }, [track]);

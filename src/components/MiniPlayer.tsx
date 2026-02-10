@@ -27,10 +27,10 @@ export const MiniPlayer = ({
   const opacity = useTransform(y, [0, 120], [1, 0]);
 
   const PlayIcon = isBuffering
-    ? () => <Loader2 className="h-4 w-4 animate-spin" />
+    ? () => <Loader2 className="h-5 w-5 animate-spin" />
     : isPlaying
-      ? () => <Pause className="h-4 w-4" />
-      : () => <Play className="h-4 w-4" />;
+      ? () => <Pause className="h-5 w-5" />
+      : () => <Play className="h-5 w-5" />;
 
   return (
     <AnimatePresence>
@@ -49,38 +49,40 @@ export const MiniPlayer = ({
             if (info.offset.y > 60 || info.velocity.y > 300) onClose();
           }}
         >
-          <div className="glass rounded-2xl shadow-card px-3 py-2.5 flex items-center gap-2.5">
+          <div className="glass rounded-3xl shadow-card px-4 py-3 flex items-center gap-3">
             <button
               className="flex items-center gap-2.5 flex-1 min-w-0"
               onClick={onOpen}
               type="button"
             >
-              <div className="h-10 w-10 shrink-0 rounded-xl overflow-hidden track-cover">
-                {track.artwork ? (
-                  <img src={track.artwork} alt={`${track.title} cover`} className="h-full w-full object-cover" />
-                ) : null}
+              <div className="h-11 w-11 shrink-0 rounded-2xl overflow-hidden track-cover shadow-md">
+                <img
+                  src={track.artwork || "/icon-track.png"}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
               </div>
               <div className="text-left min-w-0">
                 <p className="text-[13px] font-semibold line-clamp-1">{track.title}</p>
                 <p className="text-[11px] text-text-muted line-clamp-1">{track.artist}</p>
               </div>
             </button>
-            <div className="flex items-center shrink-0">
-              <button className="p-1.5 rounded-full active:bg-white/30" onClick={onPrev} type="button">
-                <SkipBack className="h-4 w-4" />
+            <div className="flex items-center shrink-0 gap-0.5">
+              <button className="p-2 rounded-full active:bg-white/30 text-accent" onClick={onPrev} type="button">
+                <SkipBack className="h-5 w-5" />
               </button>
               <button
-                className="h-9 w-9 rounded-full bg-accent text-white flex items-center justify-center shadow-glow"
+                className="h-11 w-11 rounded-full bg-transparent text-accent flex items-center justify-center active:bg-white/20"
                 onClick={isBuffering ? undefined : onToggle}
                 type="button"
               >
                 <PlayIcon />
               </button>
-              <button className="p-1.5 rounded-full active:bg-white/30" onClick={onNext} type="button">
-                <SkipForward className="h-4 w-4" />
+              <button className="p-2 rounded-full active:bg-white/30 text-accent" onClick={onNext} type="button">
+                <SkipForward className="h-5 w-5" />
               </button>
-              <button className="p-1.5 rounded-full active:bg-white/30 ml-0.5" onClick={onClose} type="button">
-                <X className="h-3.5 w-3.5 text-text-muted" />
+              <button className="p-2 rounded-full active:bg-white/30 ml-0.5 text-text-muted" onClick={onClose} type="button">
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>

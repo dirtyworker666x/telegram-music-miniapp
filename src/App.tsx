@@ -116,8 +116,9 @@ const App = () => {
     if ("mediaSession" in navigator) {
       navigator.mediaSession.playbackState = "playing";
       const artwork: MediaImage[] = [];
-      if (track.artwork) artwork.push({ src: track.artwork, sizes: "256x256", type: "image/jpeg" });
-      navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: "TGPlayer", artwork });
+      const artSrc = track.artwork || (typeof window !== "undefined" ? `${window.location.origin}/icon-track.png` : "");
+      if (artSrc) artwork.push({ src: artSrc, sizes: "256x256", type: track.artwork ? "image/jpeg" : "image/png" });
+      navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: "TGPlay", artwork });
     }
 
     // Resolve прямой VK CDN URL (маленький запрос через туннель)
@@ -177,24 +178,31 @@ const App = () => {
   }, []);
 
   // ─── Playlist actions ────────────────────────────────────────────
-  const handleAdd = useCallback(async (track: Track) => {
-    if (!isLoggedIn) { toast.error("Войдите через Telegram"); return; }
-    try {
-      if (await addToPlaylist(track)) { setPlaylist(await fetchPlaylist()); toast.success("Добавлено"); }
-      else toast.error("Не удалось сохранить");
-    } catch { toast.error("Не удалось сохранить"); }
-  }, [isLoggedIn]);
-
   const handleRemove = useCallback(async (track: Track) => {
     try { if (await removeFromPlaylist(track.id)) { setPlaylist(await fetchPlaylist()); toast.success("Удалено"); } }
     catch { toast.error("Не удалось удалить"); }
   }, []);
 
-  const handleSendToBot = useCallback(async (track: Track) => {
+  /** Одна кнопка: добавить в плейлист + сохранить в облако (чат бота), один тост */
+  const handleAddAndSend = useCallback(async (track: Track) => {
     if (!isLoggedIn) { toast.error("Войдите через Telegram"); return; }
-    toast.info("Отправляем...");
-    try { if (await sendToBot(track.id)) toast.success("Отправлено!"); else toast.error("Ошибка отправки"); }
-    catch { toast.error("Ошибка отправки"); }
+    const t = toast.loading("Добавляем...");
+    try {
+      const [addOk, sendOk] = await Promise.all([
+        addToPlaylist(track),
+        sendToBot(track.id),
+      ]);
+      const list = await fetchPlaylist();
+      setPlaylist(list);
+      toast.dismiss(t);
+      if (addOk && sendOk) toast.success("Трек добавлен в плейлист и сохранён в облако");
+      else if (sendOk) toast.success("Трек сохранён в облако");
+      else if (addOk) toast.success("Трек добавлен в плейлист");
+      else toast.error("Не удалось добавить или сохранить");
+    } catch {
+      toast.dismiss(t);
+      toast.error("Ошибка");
+    }
   }, [isLoggedIn]);
 
   const handleCloseMiniPlayer = useCallback(() => {
@@ -311,38 +319,43 @@ const App = () => {
   useMediaSession(currentTrack, isPlaying, togglePlay, handleNext, handlePrev, handleSeek, duration, currentTime);
 
   return (
-    <div className="min-h-full px-4 pt-4 pb-28 space-y-5">
-      <header className="space-y-3 header-on-gradient">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-[11px] uppercase text-white/80 tracking-[0.15em] font-medium">
+    <div className="min-h-full px-4 pt-5 pb-32 space-y-8">
+      {/* Header — одна строка: логотип, заголовок, приветствие */}
+      <header className="space-y-4">
+        <div className="flex items-center justify-between gap-1 pl-0.5">
+          {/* Иконка с картинки: голубой фон сделан прозрачным, размер в 2 раза больше */}
+          <div className="w-[7rem] h-[7rem] shrink-0 flex items-center justify-center ml-0.5 -my-2 flex-shrink-0" aria-hidden>
+            <img src="/icon.png" alt="" className="w-full h-full object-contain" />
+          </div>
+          <div className="flex-1 min-w-0 -ml-1">
+            <h1 className="text-xl font-semibold text-white tracking-tight truncate">TGPlay</h1>
+            <p className="text-[11px] uppercase text-white/70 tracking-[0.12em] font-medium truncate">
               {isLoggedIn ? `Привет, ${tgUser.first_name}` : "Telegram Mini App"}
             </p>
-            <h1 className="text-xl font-semibold text-white tracking-tight">TGPlayer</h1>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur-sm text-xl">🎵</div>
         </div>
         <SearchBar value={query} onChange={setQuery} />
       </header>
 
+      {/* Секция поиска — карточный блок */}
       <section className="space-y-4">
         {loading ? <LoadingState /> : null}
         {error ? <ErrorState message={error} /> : null}
-        <TrackList title="Результаты поиска" tracks={visibleTracks} onSelect={playTrack} onAdd={handleAdd} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
+        <TrackList title="Результаты поиска" tracks={visibleTracks} onSelect={playTrack} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
         {tracks.length > MAX_VISIBLE && !showAll && (
-          <button className="w-full py-2 text-[13px] font-medium text-accent rounded-xl glass active:opacity-70" onClick={() => setShowAll(true)} type="button">
+          <button className="w-full py-3 text-[13px] font-medium text-accent rounded-2xl glass shadow-card active:opacity-70" onClick={() => setShowAll(true)} type="button">
             Показать ещё {tracks.length - MAX_VISIBLE} треков
           </button>
         )}
       </section>
 
       {isLoggedIn && (
-        <TrackList title="Мой плейлист" tracks={playlist} onSelect={playTrack} onRemove={handleRemove} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
+        <TrackList title="Мой плейлист" tracks={playlist} onSelect={playTrack} onRemove={handleRemove} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
       )}
 
       <MiniPlayer track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onOpen={() => setIsPlayerOpen(true)} onClose={handleCloseMiniPlayer} />
 
-      <FullPlayer isOpen={isPlayerOpen} track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} currentTime={currentTime} duration={duration} onClose={() => setIsPlayerOpen(false)} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onSeek={handleSeek} onSaveToPlaylist={handleAdd} onSendToBot={handleSendToBot} isLoggedIn={isLoggedIn} />
+      <FullPlayer isOpen={isPlayerOpen} track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} currentTime={currentTime} duration={duration} onClose={() => setIsPlayerOpen(false)} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onSeek={handleSeek} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
 
       <audio ref={audioRef} preload="auto" playsInline />
     </div>

@@ -46,3 +46,8 @@ logs/
 # Temporary
 *.tmp
 *.bak
+
+# Runtime locks (туннель, бот)
+.tunnel-watchdog.lock
+backend/bot.lock
+tunnel_out.txt

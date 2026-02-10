@@ -9,7 +9,9 @@ initTelegram();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
-    <Toaster richColors position="top-center" />
+    <div className="app-scroll">
+      <App />
+      <Toaster richColors position="top-center" />
+    </div>
   </React.StrictMode>
 );

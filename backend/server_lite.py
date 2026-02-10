@@ -1,5 +1,5 @@
 """
-TGPlayer Lite API — поиск VK + ffmpeg-стриминг HLS→MP3 + Telegram auth + плейлисты.
+TGPlay Lite API — поиск VK + ffmpeg-стриминг HLS→MP3 + Telegram auth + плейлисты.
 Запускай:  python3 server_lite.py
 
 Оптимизации:
@@ -12,6 +12,7 @@ TGPlayer Lite API — поиск VK + ffmpeg-стриминг HLS→MP3 + Telegr
 """
 from __future__ import annotations
 import asyncio, hashlib, hmac, json, os, re, shutil, time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict
 from urllib.parse import parse_qs, unquote
@@ -79,6 +80,12 @@ def _has_cyrillic(text: str) -> bool:
 def _has_latin(text: str) -> bool:
     return bool(re.search(r'[a-zA-Z]', text))
 
+# Формат VK track_id: owner_id (опционально минус) + _ + id (только цифры)
+TRACK_ID_RE = re.compile(r"^-?\d+_\d+$")
+
+def _valid_track_id(track_id: str) -> bool:
+    return bool(track_id and TRACK_ID_RE.match(track_id))
+
 
 FFMPEG = shutil.which("ffmpeg")
 if not FFMPEG:
@@ -90,10 +97,17 @@ from fastapi import FastAPI, Query, Path as Param, Header, HTTPException, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, RedirectResponse
 
-app = FastAPI(title="TGPlayer Lite API", docs_url="/docs", redoc_url=None)
-
 # ─── Единая HTTP-сессия ──────────────────────────────────────────
 _http_session: Optional[aiohttp.ClientSession] = None
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    yield
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+
+app = FastAPI(title="TGPlay Lite API", docs_url="/docs", redoc_url=None, lifespan=_lifespan)
 
 async def get_session() -> aiohttp.ClientSession:
     global _http_session
@@ -110,11 +124,6 @@ async def get_session() -> aiohttp.ClientSession:
         _http_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     return _http_session
 
-@app.on_event("shutdown")
-async def shutdown():
-    global _http_session
-    if _http_session and not _http_session.closed:
-        await _http_session.close()
 
 # ─── CORS ────────────────────────────────────────────────────────
 app.add_middleware(
@@ -400,7 +409,7 @@ async def ffmpeg_stream_mp3(source_url: str):
 
 @app.get("/api/status")
 async def api_status():
-    return {"status": "online", "message": "TGPlayer Lite API"}
+    return {"status": "online", "message": "TGPlay Lite API"}
 
 
 @app.get("/api/music/search")
@@ -439,7 +448,7 @@ async def _batch_presolve(track_ids: List[str]):
 @app.get("/api/music/resolve/{track_id}")
 async def resolve_url(track_id: str = Param(...)):
     """Возвращает прямой VK CDN URL. Клиент грузит аудио напрямую — без прокси."""
-    if not re.match(r"^-?\d+_\d+$", track_id):
+    if not _valid_track_id(track_id):
         raise HTTPException(400, "Invalid track ID format")
     url = await vk_get_audio_url(track_id)
     if not url:
@@ -454,7 +463,7 @@ async def resolve_url(track_id: str = Param(...)):
 @app.get("/api/music/download/{track_id}")
 async def download(track_id: str = Param(...)):
     """302 redirect на VK CDN для прямых MP3. ffmpeg только для HLS."""
-    if not re.match(r"^-?\d+_\d+$", track_id):
+    if not _valid_track_id(track_id):
         raise HTTPException(400, "Invalid track ID format")
 
     url = await vk_get_audio_url(track_id)
@@ -529,6 +538,8 @@ async def add_to_playlist(track: TrackPayload, authorization: Optional[str] = He
 
 @app.delete("/api/playlist/{track_id}")
 async def remove_from_playlist(track_id: str, authorization: Optional[str] = Header(None)):
+    if not _valid_track_id(track_id):
+        raise HTTPException(400, "Invalid track ID format")
     user = get_user_from_header(authorization)
     tracks = load_playlist(user["id"])
     tracks = [t for t in tracks if t["id"] != track_id]
@@ -543,8 +554,10 @@ CACHE_DIR.mkdir(exist_ok=True)
 _MAX_CACHE_FILES = 100  # макс файлов в кеше
 
 def _cache_mp3_path(track_id: str) -> Path:
-    safe = track_id.replace("/", "_").replace("..", "")
-    return CACHE_DIR / f"{safe}.mp3"
+    # Только валидный формат VK — защита от path traversal
+    if not _valid_track_id(track_id):
+        track_id = hashlib.sha256(track_id.encode()).hexdigest()[:32]
+    return CACHE_DIR / f"{track_id}.mp3"
 
 def _cleanup_cache():
     """Удаляем самые старые файлы если кеш переполнен."""
@@ -656,7 +669,7 @@ async def _send_track_to_telegram(chat_id: int, track_id: str) -> None:
     """Фоновая задача: получает MP3 и отправляет в Telegram.
     Делается в фоне, чтобы HTTP-запрос из Mini App завершался быстро.
     """
-    if not re.match(r"^-?\d+_\d+$", track_id):
+    if not _valid_track_id(track_id):
         print(f"⚠️ [bg] Invalid track ID format: {track_id}")
         return
 
@@ -721,7 +734,7 @@ async def send_to_bot(
     user = get_user_from_header(authorization)
     chat_id = user["id"]
 
-    if not re.match(r"^-?\d+_\d+$", track_id):
+    if not _valid_track_id(track_id):
         raise HTTPException(400, "Invalid track ID format")
 
     if background is None:
@@ -749,36 +762,39 @@ DIST_DIR = Path(__file__).parent.parent / "dist"
 _static_dir = Path(__file__).parent / "static"
 _front = DIST_DIR if DIST_DIR.is_dir() else (_static_dir if _static_dir.is_dir() else None)
 
+# Без кэша — Telegram всегда подтягивает свежий index.html и новый дизайн
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 if _front:
     _index = _front / "index.html"
 
-    # Раздаём /assets/* как статику (JS, CSS, изображения)
     _assets = _front / "assets"
     if _assets.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
 
-    # Корень и все остальные пути → index.html (SPA fallback)
     @app.get("/")
     async def serve_index():
-        return FileResponse(str(_index), media_type="text/html")
+        return FileResponse(str(_index), media_type="text/html", headers=_NO_CACHE_HEADERS)
 
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
-        # Если файл существует в dist — отдаём его
         file_path = _front / path
         if file_path.is_file() and ".." not in path:
             return FileResponse(str(file_path))
-        # Иначе SPA fallback
-        return FileResponse(str(_index), media_type="text/html")
+        return FileResponse(str(_index), media_type="text/html", headers=_NO_CACHE_HEADERS)
 
-    print(f"📁 Serving frontend from {_front}")
+    print(f"📁 Serving frontend from {_front} (no-cache for index)")
 else:
     print(f"⚠️  dist/ не найдена. Запусти: npm run build")
 
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"🎵 TGPlayer Lite API on http://0.0.0.0:{PORT}")
+    print(f"🎵 TGPlay Lite API on http://0.0.0.0:{PORT}")
     print(f"📖 Docs: http://127.0.0.1:{PORT}/docs")
     print(f"👥 Max concurrent: 200 | Keep-alive: 120s")
     uvicorn.run(

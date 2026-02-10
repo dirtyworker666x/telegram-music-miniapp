@@ -1,17 +1,23 @@
 """
-TGPlayer Telegram Bot — обрабатывает /start и отправляет кнопку Mini App.
-Запускай:  python3 bot.py
+TGPlay Telegram Bot — один экземпляр (fcntl flock), /start → одно сообщение.
 """
 from __future__ import annotations
-import asyncio, json, os, signal, sys
+import asyncio, os, signal, sys
 from pathlib import Path
 from dotenv import load_dotenv
 import aiohttp
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows
 
 load_dotenv(Path(__file__).parent / ".env")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+LOCK_FILE = Path(__file__).parent / "bot.lock"
+_lock_fd = None
 
 if not BOT_TOKEN:
     print("❌  BOT_TOKEN не указан в backend/.env!")
@@ -78,43 +84,28 @@ async def handle_update(session: aiohttp.ClientSession, update: dict):
             chat_id=chat_id,
             text=(
                 f"👋 Привет, {first_name}!\n\n"
-                "🎵 <b>TGPlayer</b> — музыкальный плеер прямо в Telegram.\n\n"
-                "Нажми кнопку ниже, чтобы открыть плеер. "
-                "Ты можешь искать треки, слушать их, "
-                "сохранять в плейлист и скачивать прямо сюда в чат!\n\n"
-                "Также можно открыть плеер через кнопку меню слева от поля ввода 👇"
+                "🎵 <b>TGPlay</b> — плеер в Telegram.\n\n"
+                f"▶️ <a href=\"{WEBAPP_URL}\">Открыть плеер</a>\n\n"
+                "Если кнопка пишет «тоннель не работает» — отправь <b>/start</b> ещё раз: придёт новая ссылка. "
+                "Или открой через кнопку меню слева от поля ввода 👇"
             ),
             parse_mode="HTML",
             reply_markup={
                 "inline_keyboard": [
-                    [
-                        {
-                            "text": "🎵 Открыть TGPlayer",
-                            "web_app": {"url": WEBAPP_URL},
-                        }
-                    ]
+                    [{"text": "🎵 Открыть плеер", "web_app": {"url": WEBAPP_URL}}],
                 ]
             },
         )
         print(f"📩 /start from {first_name} (chat_id={chat_id})")
 
     elif text == "/playlist":
-        # Redirect to mini app with playlist tab
         await tg_request(
             session,
             "sendMessage",
             chat_id=chat_id,
-            text="📋 Открой плеер, чтобы увидеть свой плейлист:",
-            reply_markup={
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "📋 Мой плейлист",
-                            "web_app": {"url": WEBAPP_URL},
-                        }
-                    ]
-                ]
-            },
+            text=f"📋 <a href=\"{WEBAPP_URL}\">Открыть плеер</a> — там плейлист.",
+            parse_mode="HTML",
+            reply_markup={"inline_keyboard": [[{"text": "📋 Открыть плеер", "web_app": {"url": WEBAPP_URL}}]]},
         )
         print(f"📩 /playlist from {first_name} (chat_id={chat_id})")
 
@@ -145,7 +136,7 @@ async def poll_updates(session: aiohttp.ClientSession):
 
 
 async def main():
-    print(f"🤖 TGPlayer Bot starting...")
+    print(f"🤖 TGPlay Bot starting...")
     print(f"🌐 WebApp URL: {WEBAPP_URL}")
 
     async with aiohttp.ClientSession() as session:
@@ -158,8 +149,9 @@ async def main():
             print("❌ Не удалось подключиться к боту!")
             return
 
-        # Удаляем webhook (если был установлен), для long polling
-        await tg_request(session, "deleteWebhook", drop_pending_updates=False)
+        # Удаляем webhook и отбрасываем старые обновления — иначе при рестарте бота
+        # одни и те же /start обработают несколько экземпляров и шлют дубли
+        await tg_request(session, "deleteWebhook", drop_pending_updates=True)
 
         # Настраиваем меню и команды
         await set_menu_button(session)
@@ -173,8 +165,50 @@ async def main():
         await poll_updates(session)
 
 
+def _acquire_lock() -> bool:
+    """Только один экземпляр: fcntl.flock (Linux/macOS). Возвращает True если lock взят."""
+    global _lock_fd
+    if fcntl is None:
+        return True
+    try:
+        _lock_fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (OSError, BlockingIOError) as e:
+        if _lock_fd is not None:
+            try:
+                os.close(_lock_fd)
+            except OSError:
+                pass
+            _lock_fd = None
+        return False
+
+
+def _release_lock() -> None:
+    global _lock_fd
+    if _lock_fd is not None and fcntl is not None:
+        try:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            os.close(_lock_fd)
+        except OSError:
+            pass
+        _lock_fd = None
+
+
+def _on_signal(signum, frame):
+    _release_lock()
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _on_signal)
+    if not _acquire_lock():
+        print("❌ Уже запущен другой экземпляр бота. Останови его: pkill -f 'python.*bot.py'")
+        sys.exit(1)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Bot stopped")
+    finally:
+        _release_lock()

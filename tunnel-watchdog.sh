@@ -1,25 +1,43 @@
 #!/usr/bin/env bash
-# ─── TGPlayer Tunnel Watchdog v7 ──────────────────────────────
-# Надёжный туннель localhost.run → backend:8787
-# - Мгновенный перезапуск при падении
-# - Keep-alive пинги каждые 15 секунд (не даёт туннелю уснуть)
-# - Автоматическое обновление WEBAPP_URL в .env
-# - Автоматический перезапуск бота при смене URL
-# - Поддержка 50+ одновременных пользователей
+# ─── TGPlay Tunnel Watchdog v8 ──────────────────────────────
+# Один экземпляр (lock), один бот, туннель localhost.run → backend:8787
 set -euo pipefail
 
 PORT=8787
-CHECK_INTERVAL=20           # Проверка здоровья каждые 20 сек
-KEEPALIVE_INTERVAL=15       # Keep-alive пинг каждые 15 сек
-RESTART_COOLDOWN=5          # Пауза перед перезапуском
-MAX_FAILURES=2              # Макс неудачных проверок до рестарта
-SSH_KEY="$HOME/.ssh/id_ed25519_tunnel"
+CHECK_INTERVAL=20
+KEEPALIVE_INTERVAL=15
+RESTART_COOLDOWN=5
+MAX_FAILURES=2
+SSH_KEY="${HOME}/.ssh/id_ed25519_tunnel"
 ENV_FILE="$(cd "$(dirname "$0")" && pwd)/backend/.env"
 LOG_FILE="$(cd "$(dirname "$0")" && pwd)/tunnel.log"
 BOT_SCRIPT="$(cd "$(dirname "$0")" && pwd)/backend/bot.py"
 VENV_ACTIVATE="$(cd "$(dirname "$0")" && pwd)/backend/venv/bin/activate"
+WATCHDOG_LOCK="$(cd "$(dirname "$0")" && pwd)/.tunnel-watchdog.lock"
 
 touch "$ENV_FILE"
+
+# ─── Один экземпляр watchdog ───────────────────────────────────
+take_watchdog_lock() {
+  if [[ -f "$WATCHDOG_LOCK" ]]; then
+    local opid
+    opid=$(cat "$WATCHDOG_LOCK" 2>/dev/null || true)
+    if [[ -n "$opid" ]] && kill -0 "$opid" 2>/dev/null; then
+      echo "Already running: watchdog PID $opid. Exit."
+      exit 1
+    fi
+    rm -f "$WATCHDOG_LOCK"
+  fi
+  echo $$ > "$WATCHDOG_LOCK"
+}
+release_watchdog_lock() { rm -f "$WATCHDOG_LOCK"; }
+take_watchdog_lock
+trap 'release_watchdog_lock; cleanup' SIGINT SIGTERM EXIT
+
+# При старте — только один бот: убить старые экземпляры и снять bot.lock
+pkill -f "python.*bot.py" 2>/dev/null || true
+rm -f "$(dirname "$BOT_SCRIPT")/bot.lock"
+sleep 2
 
 # ─── Colors ──────────────────────────────────────────────────
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -43,7 +61,6 @@ cleanup() {
   [[ -n "$BOT_PID" ]] && kill "$BOT_PID" 2>/dev/null
   exit 0
 }
-trap cleanup SIGINT SIGTERM EXIT
 
 # ─── Extract URL from tunnel output ─────────────────────────
 extract_url() {
@@ -78,21 +95,28 @@ set_webapp_url() {
   ok "WEBAPP_URL = $url"
 }
 
-# ─── Restart bot (picks up new WEBAPP_URL) ───────────────────
+# ─── Restart bot: дождаться завершения всех ботов, затем один запуск ───
 restart_bot() {
   if [[ -n "$BOT_PID" ]]; then
     kill "$BOT_PID" 2>/dev/null
     wait "$BOT_PID" 2>/dev/null
     BOT_PID=""
   fi
-  # Kill any other bot instances
   pkill -f "python.*bot.py" 2>/dev/null || true
-  sleep 2
-  
+  # Ждём, пока все процессы бота реально завершатся (до 15 сек)
+  local i=0
+  while pgrep -f "python.*bot.py" >/dev/null 2>&1 && [[ $i -lt 15 ]]; do
+    sleep 1
+    ((i++))
+  done
+  if pgrep -f "python.*bot.py" >/dev/null 2>&1; then
+    pkill -9 -f "python.*bot.py" 2>/dev/null || true
+    sleep 2
+  fi
   if [[ -f "$BOT_SCRIPT" && -f "$VENV_ACTIVATE" ]]; then
     (
       source "$VENV_ACTIVATE"
-      python3 -u "$BOT_SCRIPT" >> "$LOG_FILE" 2>&1
+      cd "$(dirname "$BOT_SCRIPT")" && python3 -u "$(basename "$BOT_SCRIPT")" >> "$LOG_FILE" 2>&1
     ) &
     BOT_PID=$!
     ok "Bot restarted (PID $BOT_PID)"
@@ -117,7 +141,6 @@ start_keepalive() {
 
 # ─── Start tunnel ────────────────────────────────────────────
 start_tunnel() {
-  # Kill old tunnels
   pkill -f "ssh.*localhost.run" 2>/dev/null || true
   [[ -n "$TUNNEL_PID" ]] && kill "$TUNNEL_PID" 2>/dev/null
   TUNNEL_PID=""
@@ -126,13 +149,18 @@ start_tunnel() {
   log "Starting tunnel → localhost:$PORT ..."
   local tmp
   tmp=$(mktemp)
-  
-  # SSH tunnel with aggressive keep-alive
-  ssh -i "$SSH_KEY" \
+  local ssh_cmd
+  if [[ -f "$SSH_KEY" ]]; then
+    ssh_cmd="ssh -i $SSH_KEY"
+  else
+    warn "SSH key not found ($SSH_KEY), using default"
+    ssh_cmd="ssh"
+  fi
+  $ssh_cmd \
       -o StrictHostKeyChecking=no \
       -o ServerAliveInterval=10 \
       -o ServerAliveCountMax=3 \
-      -o ConnectTimeout=15 \
+      -o ConnectTimeout=20 \
       -o TCPKeepAlive=yes \
       -o ExitOnForwardFailure=yes \
       -R 80:localhost:$PORT \
@@ -203,7 +231,7 @@ check_tunnel() {
 # ─── Main loop ───────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   TGPlayer Tunnel Watchdog v7            ║${NC}"
+echo -e "${CYAN}║   TGPlay Tunnel Watchdog v8             ║${NC}"
 echo -e "${CYAN}║   Keep-alive: ${KEEPALIVE_INTERVAL}s | Check: ${CHECK_INTERVAL}s          ║${NC}"
 echo -e "${CYAN}║   Max users: 50+ | Auto-restart: ON      ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"

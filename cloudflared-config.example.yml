@@ -1,0 +1,23 @@
+# Cloudflare Named Tunnel — постоянный URL, не падает как localhost.run.
+#
+# Как получить:
+# 1. Зайди на https://one.dash.cloudflare.com/ (аккаунт Cloudflare, бесплатно).
+# 2. Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared.
+# 3. Имя туннеля, например: tgplayer
+# 4. Установи cloudflared локально и выполни: cloudflared tunnel login
+# 5. Создай туннель: cloudflared tunnel create tgplayer
+# 6. Добавь route: cloudflared tunnel route dns tgplayer tgplayer.твой-домен.com
+#    Или используй выданный хост типа xxx.cfargotunnel.com
+# 7. Скопируй этот файл в config.yml и вставь свой tunnel: UUID из "cloudflared tunnel list"
+# 8. Запуск: cloudflared tunnel run tgplayer
+#
+# Либо используй Quick Tunnels с токеном (после создания туннеля в Dashboard):
+# Cloudflare выдаст TUNNEL_TOKEN — запуск: cloudflared tunnel run --token $TUNNEL_TOKEN
+
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /path/to/credentials.json
+
+ingress:
+  - hostname: tgplayer.your-domain.com
+    service: http://localhost:8000
+  - service: http_status:404
