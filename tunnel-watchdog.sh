@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─── TGPlayer Tunnel Watchdog v7 ──────────────────────────────
-# Надёжный туннель localhost.run → backend:8000
+# Надёжный туннель localhost.run → backend:8787
 # - Мгновенный перезапуск при падении
 # - Keep-alive пинги каждые 15 секунд (не даёт туннелю уснуть)
 # - Автоматическое обновление WEBAPP_URL в .env
@@ -8,7 +8,7 @@
 # - Поддержка 50+ одновременных пользователей
 set -euo pipefail
 
-PORT=8000
+PORT=8787
 CHECK_INTERVAL=20           # Проверка здоровья каждые 20 сек
 KEEPALIVE_INTERVAL=15       # Keep-alive пинг каждые 15 сек
 RESTART_COOLDOWN=5          # Пауза перед перезапуском

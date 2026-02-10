@@ -126,7 +126,8 @@ const App = () => {
       .then((directUrl) => setAudioUrl(directUrl))
       .catch(() => {
         // Fallback: прокси через бэкенд если resolve не сработал
-        setAudioUrl(`${import.meta.env.VITE_API_BASE ?? "http://localhost:8000"}/api/music/download/${encodeURIComponent(track.id)}`);
+        const base = typeof window !== "undefined" ? "" : (import.meta.env.VITE_API_BASE || "http://localhost:8000");
+        setAudioUrl(`${base}/api/music/download/${encodeURIComponent(track.id)}`);
       });
   }, []);
 

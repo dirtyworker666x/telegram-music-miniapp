@@ -2,9 +2,13 @@ import type { Track } from "../types";
 import { getInitData } from "./telegram";
 
 /**
- * API клиент с таймаутами для работы через VPN/туннель.
+ * API: относительные URL — запросы идут на тот же хост, с которого открыт Mini App.
  */
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+function getApiBase(): string {
+  if (typeof window !== "undefined" && window.location?.origin) return "";
+  return import.meta.env.VITE_API_BASE || "http://localhost:8000";
+}
+const API_BASE = getApiBase();
 
 const pick = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim().length > 0 ? value : fallback;
@@ -98,6 +102,12 @@ const _URL_TTL = 20 * 60_000; // 20 мин
 /**
  * Получает прямой VK CDN URL через бэкенд /resolve.
  * Клиент потом грузит аудио напрямую с VK — без прокси через туннель.
+ *
+ * Для максимальной скорости старта:
+ * - Даже если VK отдаёт HLS (.m3u8), для Mini App используем ПРЯМОЙ
+ *   VK CDN URL (HTMLAudioElement в мобильных WebView умеет HLS).
+ * - Прокси `/api/music/download` используем только как Fallback
+ *   (см. catch в `App.tsx`), чтобы не тянуть весь аудиопоток через туннель.
  */
 export const resolveAudioUrl = async (trackId: string): Promise<string> => {
   // Проверяем кеш
@@ -116,13 +126,8 @@ export const resolveAudioUrl = async (trackId: string): Promise<string> => {
   const data = await resp.json();
   const url: string = data.url;
 
-  // Если HLS — fallback на наш прокси (ffmpeg нужен)
-  if (data.hls) {
-    const proxyUrl = `${API_BASE}/api/music/download/${encodeURIComponent(trackId)}`;
-    _urlCache.set(trackId, { url: proxyUrl, ts: Date.now() });
-    return proxyUrl;
-  }
-
+  // Для Mini App всегда предпочитаем прямой VK CDN URL —
+  // так старт воспроизведения максимально быстрый и не грузим туннель.
   _urlCache.set(trackId, { url, ts: Date.now() });
   return url;
 };

@@ -86,7 +86,7 @@ if not FFMPEG:
     exit(1)
 
 import aiohttp
-from fastapi import FastAPI, Query, Path as Param, Header, HTTPException, Request
+from fastapi import FastAPI, Query, Path as Param, Header, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, RedirectResponse
 
@@ -652,15 +652,15 @@ async def _fetch_track_info(track_id: str) -> Dict:
         return {}
 
 
-@app.post("/api/send-to-bot/{track_id}")
-async def send_to_bot(track_id: str, authorization: Optional[str] = Header(None)):
-    user = get_user_from_header(authorization)
-    chat_id = user["id"]
-
+async def _send_track_to_telegram(chat_id: int, track_id: str) -> None:
+    """Фоновая задача: получает MP3 и отправляет в Telegram.
+    Делается в фоне, чтобы HTTP-запрос из Mini App завершался быстро.
+    """
     if not re.match(r"^-?\d+_\d+$", track_id):
-        raise HTTPException(400, "Invalid track ID format")
+        print(f"⚠️ [bg] Invalid track ID format: {track_id}")
+        return
 
-    # Получаем URL и инфо параллельно (без resource leak)
+    # Получаем URL и инфо параллельно
     url, track_info = await asyncio.gather(
         vk_get_audio_url(track_id),
         _fetch_track_info(track_id),
@@ -668,21 +668,23 @@ async def send_to_bot(track_id: str, authorization: Optional[str] = Header(None)
     )
 
     if isinstance(url, Exception) or not url:
-        raise HTTPException(404, "Track not found")
+        print(f"⚠️ [bg] Failed to get VK url for {track_id}: {url}")
+        return
     if isinstance(track_info, Exception):
         track_info = {}
 
     title = track_info.get("title", "Unknown")[:100]
     artist = track_info.get("artist", "Unknown")[:100]
 
-    print(f"📤 Send to bot {chat_id}: {artist} — {title}")
+    print(f"📤 [bg] Send to bot {chat_id}: {artist} — {title}")
 
     # Получаем MP3 (кеш → прямое скачивание → ffmpeg)
     mp3_data = await _get_mp3_data(track_id, url)
     if not mp3_data:
-        raise HTTPException(502, "Failed to get audio")
+        print(f"⚠️ [bg] Failed to get MP3 data for {track_id}")
+        return
 
-    print(f"📦 MP3 ready: {len(mp3_data) // 1024}KB, sending to Telegram...")
+    print(f"📦 [bg] MP3 ready: {len(mp3_data) // 1024}KB, sending to Telegram...")
 
     # Отправляем через Telegram Bot API
     session = await get_session()
@@ -697,14 +699,38 @@ async def send_to_bot(track_id: str, authorization: Optional[str] = Header(None)
         async with session.post(tg_url, data=form) as resp:
             result = await resp.json()
     except Exception as e:
-        raise HTTPException(502, f"Telegram API error: {e}")
+        print(f"⚠️ [bg] Telegram API error: {e}")
+        return
 
     if not result.get("ok"):
         desc = result.get("description", "Unknown error")
-        raise HTTPException(502, f"Telegram error: {desc}")
+        print(f"⚠️ [bg] Telegram error: {desc}")
+        return
 
-    print(f"✅ Sent to chat {chat_id}")
-    return {"status": "sent", "chat_id": chat_id}
+    print(f"✅ [bg] Sent to chat {chat_id}")
+
+
+@app.post("/api/send-to-bot/{track_id}")
+async def send_to_bot(
+    track_id: str,
+    authorization: Optional[str] = Header(None),
+    background: BackgroundTasks = None,
+):
+    """Эндпоинт для Mini App: быстро подтверждает запрос и
+    отправляет трек в чат в фоне, чтобы ничего не «висело»."""
+    user = get_user_from_header(authorization)
+    chat_id = user["id"]
+
+    if not re.match(r"^-?\d+_\d+$", track_id):
+        raise HTTPException(400, "Invalid track ID format")
+
+    if background is None:
+        # fallback (не должен срабатывать, но на всякий случай)
+        asyncio.create_task(_send_track_to_telegram(chat_id, track_id))
+    else:
+        background.add_task(_send_track_to_telegram, chat_id, track_id)
+
+    return {"status": "queued", "chat_id": chat_id}
 
 
 # ─── Health check ────────────────────────────────────────────────
