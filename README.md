@@ -5,14 +5,17 @@
 ## Быстрый старт (локально)
 
 ```bash
-# Бэкенд
+# 1. Токены в backend/.env (BOT_TOKEN, VK_TOKEN)
 cd backend && pip install -r requirements.txt && cp .env.example .env
-# Заполни .env: BOT_TOKEN, VK_TOKEN, WEBAPP_URL
-python server_lite.py
+# Заполни .env и выйди из backend/
 
-# Туннель (временный URL)
-./tunnel-watchdog.sh
+# 2. Запуск всего: бэкенд + туннель + бот
+npm run tunnel
+# или: ./scripts/restart-all.sh
 ```
+
+После запуска в терминале появится **URL туннеля** (например `https://xxx.trycloudflare.com`).  
+`WEBAPP_URL` в `.env` обновится автоматически — бот будет отправлять Mini App с этим URL.
 
 ## Стабильный URL и 100k пользователей
 

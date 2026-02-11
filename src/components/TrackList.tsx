@@ -4,13 +4,14 @@ import { TrackRow } from "./TrackRow";
 type TrackListProps = {
   title: string;
   tracks: Track[];
+  playlist?: Track[];
   onSelect: (track: Track) => void;
   onAddAndSend?: (track: Track) => void | Promise<void>;
   onRemove?: (track: Track) => void;
   isLoggedIn?: boolean;
 };
 
-export const TrackList = ({ title, tracks, onSelect, onAddAndSend, onRemove, isLoggedIn }: TrackListProps) => {
+export const TrackList = ({ title, tracks, playlist = [], onSelect, onAddAndSend, onRemove, isLoggedIn }: TrackListProps) => {
   if (tracks.length === 0) {
     return null;
   }
@@ -30,6 +31,7 @@ export const TrackList = ({ title, tracks, onSelect, onAddAndSend, onRemove, isL
             onAddAndSend={onAddAndSend}
             onRemove={onRemove}
             isLoggedIn={isLoggedIn}
+            isInPlaylist={playlist.some((t) => t.id === track.id)}
           />
         ))}
       </div>

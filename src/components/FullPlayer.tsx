@@ -1,6 +1,7 @@
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, Loader2, Pause, Play, Send, SkipBack, SkipForward } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Loader2, Pause, Play, Send, SkipBack, SkipForward, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import type { Track } from "../types";
 import { WaveformSeekBar } from "./WaveformSeekBar";
 
@@ -17,8 +18,13 @@ type FullPlayerProps = {
   onPrev: () => void;
   onSeek: (value: number) => void;
   onAddAndSend?: (track: Track) => void | Promise<void>;
+  onRemove?: (track: Track) => void | Promise<void>;
   isLoggedIn?: boolean;
+  isInPlaylist?: boolean;
 };
+
+// Используем CSS‑переменную для support светлой/тёмной темы (как у mini player)
+const ACCENT_STYLE = { color: "rgb(var(--accent))" } as const;
 
 export const FullPlayer = ({
   isOpen,
@@ -33,11 +39,18 @@ export const FullPlayer = ({
   onPrev,
   onSeek,
   onAddAndSend,
+  onRemove,
   isLoggedIn,
+  isInPlaylist,
 }: FullPlayerProps) => {
   const [dragging, setDragging] = useState(false);
   const [dragTime, setDragTime] = useState(0);
+  const [maxDragY, setMaxDragY] = useState(1200);
   const displayTime = dragging ? dragTime : currentTime;
+
+  useEffect(() => {
+    setMaxDragY(typeof window !== "undefined" ? window.innerHeight : 1200);
+  }, []);
 
   const onWaveSeekStart = useCallback(() => {
     setDragging(true);
@@ -56,50 +69,77 @@ export const FullPlayer = ({
 
   if (!track) return null;
 
-  return (
+  const player = (
     <AnimatePresence>
       {isOpen ? (
         <motion.div
-          className="fixed inset-0 z-50 flex flex-col bg-black/40 backdrop-blur-2xl"
+          className="fixed z-[99999] flex flex-col w-full bg-black/65 overflow-hidden"
+          style={{
+            // inset: 0 + отрицательный top — тянем оверлей до самого верха (включая safe area)
+            top: "calc(-1 * env(safe-area-inset-top, 0px))",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            width: "100%",
+            height: "calc(100dvh + env(safe-area-inset-top, 0px))",
+            minHeight: "calc(100dvh + env(safe-area-inset-top, 0px))",
+            margin: 0,
+            padding: 0,
+            backdropFilter: "blur(40px)",
+            WebkitBackdropFilter: "blur(40px)",
+            touchAction: "none",
+          }}
           initial={{ y: "100%" }}
           animate={{ y: 0 }}
           exit={{ y: "100%" }}
           transition={{ type: "spring", damping: 28, stiffness: 300 }}
+          drag="y"
+          dragConstraints={{ top: 0, bottom: maxDragY }}
+          dragElastic={{ top: 0.1, bottom: 0.3 }}
+          dragTransition={{ bounceStiffness: 400, bounceDamping: 40 }}
+          onDragEnd={(_e, info) => {
+            if (info.offset.y > 80 || info.velocity.y > 350) onClose();
+          }}
         >
           <div className="relative flex-1 overflow-hidden flex flex-col">
-            {/* Background blur art */}
+            {/* Размытый фон обложки */}
             <div
-              className="absolute inset-0 opacity-50 blur-3xl scale-110"
+              className="absolute inset-0 opacity-60 blur-3xl scale-110 pointer-events-none"
               style={{
                 backgroundImage: track.artwork
                   ? `url(${track.artwork})`
-                  : "linear-gradient(135deg, rgba(0,136,204,0.4), rgba(0,102,153,0.4))",
+                  : "linear-gradient(135deg, rgba(0,136,204,0.6), rgba(0,102,153,0.6))",
                 backgroundSize: "cover",
-                backgroundPosition: "center"
+                backgroundPosition: "center",
               }}
             />
+            {/* Градиент — снизу заметно затемнён */}
+            <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/25 to-black/75 pointer-events-none" />
 
-            {/* Content */}
-            <div className="relative z-10 flex flex-col h-full px-5 pt-1 pb-[max(12px,env(safe-area-inset-bottom))]">
-              {/* Header bar */}
-              <div className="flex items-center justify-between mb-1">
-                <button
-                  className="p-2 -ml-2 rounded-full bg-transparent text-white/80 active:opacity-70 transition border-0"
-                  onClick={onClose}
-                  type="button"
-                >
-                  <ChevronDown className="h-6 w-6" />
-                </button>
+            {/* Контент — отступ сверху = safe area (чтобы не уйти под вырез) */}
+            <div
+              className="relative z-10 flex flex-col flex-1 px-5 overflow-hidden"
+              style={{
+                paddingTop: "env(safe-area-inset-top, 0)",
+                paddingBottom: "max(16px, env(safe-area-inset-bottom))",
+              }}
+            >
+              {/* Хедер — иконка и текст вместе по центру */}
+              <div className="flex items-center justify-center flex-shrink-0 py-1" style={{ gap: 0 }}>
+                <img
+                  src="/icon.png"
+                  alt=""
+                  className="w-11 h-11 object-contain opacity-50 shrink-0 -mr-2"
+                />
                 <div className="text-[11px] text-white/50 font-medium uppercase tracking-[0.15em]">TGPlay</div>
-                <div className="w-10" />
               </div>
 
-              {/* Обложка и название/исполнитель вплотную к обложке; пустой блок отталкивает дорожку вниз */}
-              <div className="flex flex-col items-center flex-shrink-0">
+              {/* Обложка и название — отступ снизу чтобы дорожка не залезала */}
+              <div className="flex flex-col items-center flex-shrink-0 mt-2 mb-12">
                 <motion.div
-                  className="w-[min(82vw,320px)] aspect-square rounded-3xl overflow-hidden shadow-2xl"
-                  animate={{ scale: isPlaying ? 1.02 : 0.96 }}
-                  transition={{ duration: 0.5 }}
+                  className="w-[min(88vw,352px)] aspect-square rounded-3xl overflow-hidden shadow-2xl"
+                  animate={{ scale: 1 }}
+                  transition={{ duration: 0.4, ease: "easeOut" }}
                 >
                   <img
                     src={track.artwork || "/icon-track.png"}
@@ -112,12 +152,10 @@ export const FullPlayer = ({
                   <p className="text-[13px] text-white/60 line-clamp-1">{track.artist}</p>
                 </div>
               </div>
-              <div className="flex-1 min-h-4" aria-hidden />
 
-              {/* Controls area — fixed at bottom */}
-              <div className="space-y-3 shrink-0">
-                {/* SoundCloud-style waveform seek bar */}
-                <div className="space-y-1">
+              {/* Аудиодорожка — по центру между названием и кнопками */}
+              <div className="flex-1 flex items-center justify-center min-h-0 py-4">
+                <div className="w-full -mx-2">
                   <WaveformSeekBar
                     trackId={track.id}
                     currentTime={displayTime}
@@ -127,49 +165,69 @@ export const FullPlayer = ({
                     onSeekEnd={onWaveSeekEnd}
                   />
                 </div>
+              </div>
 
-                {/* Play controls — без фона (только «Добавить» с фоном) */}
-                <div className="flex items-center justify-center gap-8">
+              {/* Кнопки воспроизведения — голубой accent как у mini */}
+              <div className="flex flex-col items-center shrink-0 pb-1" style={{ gap: 4 }}>
+                <div className="flex items-center justify-center gap-7">
                   <button
-                    className="p-4 rounded-full bg-transparent text-white active:opacity-70 transition border-0"
+                    className="p-5 rounded-full bg-transparent active:opacity-80 border-0 touch-manipulation select-none"
+                    style={ACCENT_STYLE}
                     onClick={onPrev}
                     type="button"
                   >
-                    <SkipBack className="h-8 w-8" />
+                    <SkipBack className="h-9 w-9" color="rgb(var(--accent))" />
                   </button>
                   <button
-                    className="h-20 w-20 rounded-full bg-transparent text-white flex items-center justify-center active:opacity-70 transition border-0"
+                    className="h-24 w-24 rounded-full bg-transparent flex items-center justify-center active:opacity-80 border-0 touch-manipulation select-none"
+                    style={ACCENT_STYLE}
                     onClick={isBuffering ? undefined : onToggle}
                     type="button"
                   >
                     {isBuffering ? (
-                      <Loader2 className="h-10 w-10 animate-spin" />
+                      <span className="loader-spin block">
+                        <Loader2 className="h-12 w-12" color="rgb(var(--accent))" />
+                      </span>
                     ) : isPlaying ? (
-                      <Pause className="h-10 w-10" />
+                      <Pause className="h-12 w-12" color="rgb(var(--accent))" />
                     ) : (
-                      <Play className="h-10 w-10 ml-0.5" />
+                      <Play className="h-12 w-12 ml-0.5" color="rgb(var(--accent))" />
                     )}
                   </button>
                   <button
-                    className="p-4 rounded-full bg-transparent text-white active:opacity-70 transition border-0"
+                    className="p-5 rounded-full bg-transparent active:opacity-80 border-0 touch-manipulation select-none"
+                    style={ACCENT_STYLE}
                     onClick={onNext}
                     type="button"
                   >
-                    <SkipForward className="h-8 w-8" />
+                    <SkipForward className="h-9 w-9" color="rgb(var(--accent))" />
                   </button>
                 </div>
 
-                {/* Одна кнопка: в плейлист + в облако (чат бота) */}
-                {isLoggedIn && onAddAndSend && track && (
-                  <div className="flex items-center justify-center pb-1">
-                    <button
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/15 text-white text-[13px] font-medium active:bg-white/25 transition"
-                      onClick={() => onAddAndSend(track)}
-                      type="button"
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                      Добавить
-                    </button>
+                {/* Кнопка Добавить — как была: отдельная строка, pill с иконкой и текстом */}
+                {isLoggedIn && track && (
+                  <div className="flex items-center justify-center">
+                    {isInPlaylist && onRemove ? (
+                      <button
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/15 text-white text-[13px] font-medium active:bg-white/25 border-0 touch-manipulation select-none"
+                        onClick={() => onRemove(track)}
+                        type="button"
+                        title="Удалить"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Удалить
+                      </button>
+                    ) : onAddAndSend ? (
+                      <button
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/15 text-white text-[13px] font-medium active:bg-white/25 border-0 touch-manipulation select-none"
+                        onClick={() => onAddAndSend(track)}
+                        type="button"
+                        title="Добавить"
+                      >
+                        <Send className="h-4 w-4" />
+                        Добавить
+                      </button>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -179,4 +237,6 @@ export const FullPlayer = ({
       ) : null}
     </AnimatePresence>
   );
+
+  return createPortal(player, document.body);
 };

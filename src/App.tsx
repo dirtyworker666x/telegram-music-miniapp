@@ -13,6 +13,7 @@ import { useTelegramTheme } from "./hooks/useTelegramTheme";
 import {
   addToPlaylist,
   fetchPlaylist,
+  getCachedAudioUrl,
   loginTelegram,
   preloadBatchUrls,
   preloadTrackUrl,
@@ -121,12 +122,15 @@ const App = () => {
       navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: "TGPlay", artwork });
     }
 
-    // Resolve прямой VK CDN URL (маленький запрос через туннель)
-    // Затем audio.src = VK CDN напрямую — минуя туннель для аудио данных
+    // Кеш → мгновенно. Иначе resolve → прямой VK, Fallback → proxy.
+    const cached = getCachedAudioUrl(track.id);
+    if (cached) {
+      setAudioUrl(cached);
+      return;
+    }
     resolveAudioUrl(track.id)
       .then((directUrl) => setAudioUrl(directUrl))
       .catch(() => {
-        // Fallback: прокси через бэкенд если resolve не сработал
         const base = typeof window !== "undefined" ? "" : (import.meta.env.VITE_API_BASE || "http://localhost:8000");
         setAudioUrl(`${base}/api/music/download/${encodeURIComponent(track.id)}`);
       });
@@ -188,17 +192,24 @@ const App = () => {
     if (!isLoggedIn) { toast.error("Войдите через Telegram"); return; }
     const t = toast.loading("Добавляем...");
     try {
-      const [addOk, sendOk] = await Promise.all([
+      const [addResult, sendOk] = await Promise.all([
         addToPlaylist(track),
         sendToBot(track.id),
       ]);
       const list = await fetchPlaylist();
       setPlaylist(list);
       toast.dismiss(t);
-      if (addOk && sendOk) toast.success("Трек добавлен в плейлист и сохранён в облако");
-      else if (sendOk) toast.success("Трек сохранён в облако");
-      else if (addOk) toast.success("Трек добавлен в плейлист");
-      else toast.error("Не удалось добавить или сохранить");
+      if (addResult.ok && addResult.status === "already_exists") {
+        toast.success(sendOk ? "Трек сохранён в облако" : "Трек уже в плейлисте");
+      } else if (addResult.ok && sendOk) {
+        toast.success("Трек добавлен в плейлист и сохранён в облако");
+      } else if (sendOk) {
+        toast.success("Трек сохранён в облако");
+      } else if (addResult.ok) {
+        toast.success("Трек добавлен в плейлист");
+      } else {
+        toast.error("Не удалось добавить или сохранить");
+      }
     } catch {
       toast.dismiss(t);
       toast.error("Ошибка");
@@ -322,17 +333,14 @@ const App = () => {
     <div className="min-h-full px-4 pt-5 pb-32 space-y-8">
       {/* Header — одна строка: логотип, заголовок, приветствие */}
       <header className="space-y-4">
-        <div className="flex items-center justify-between gap-1 pl-0.5">
-          {/* Иконка с картинки: голубой фон сделан прозрачным, размер в 2 раза больше */}
-          <div className="w-[7rem] h-[7rem] shrink-0 flex items-center justify-center ml-0.5 -my-2 flex-shrink-0" aria-hidden>
-            <img src="/icon.png" alt="" className="w-full h-full object-contain" />
+        <div className="flex flex-col items-center gap-1">
+          <div className="flex items-center justify-center" style={{ gap: 0 }}>
+            <img src="/icon.png" alt="" className="w-11 h-11 object-contain opacity-50 shrink-0 -mr-2" aria-hidden />
+            <h1 className="text-xl font-semibold text-white tracking-tight">TGPlay</h1>
           </div>
-          <div className="flex-1 min-w-0 -ml-1">
-            <h1 className="text-xl font-semibold text-white tracking-tight truncate">TGPlay</h1>
-            <p className="text-[11px] uppercase text-white/70 tracking-[0.12em] font-medium truncate">
-              {isLoggedIn ? `Привет, ${tgUser.first_name}` : "Telegram Mini App"}
-            </p>
-          </div>
+          <p className="text-[11px] uppercase text-white/70 tracking-[0.12em] font-medium">
+            {isLoggedIn ? `Привет, ${tgUser.first_name}` : "Telegram Mini App"}
+          </p>
         </div>
         <SearchBar value={query} onChange={setQuery} />
       </header>
@@ -341,21 +349,24 @@ const App = () => {
       <section className="space-y-4">
         {loading ? <LoadingState /> : null}
         {error ? <ErrorState message={error} /> : null}
-        <TrackList title="Результаты поиска" tracks={visibleTracks} onSelect={playTrack} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
+        <TrackList title="Результаты поиска" tracks={visibleTracks} playlist={playlist} onSelect={playTrack} onAddAndSend={handleAddAndSend} onRemove={handleRemove} isLoggedIn={isLoggedIn} />
         {tracks.length > MAX_VISIBLE && !showAll && (
-          <button className="w-full py-3 text-[13px] font-medium text-accent rounded-2xl glass shadow-card active:opacity-70" onClick={() => setShowAll(true)} type="button">
+          <button className="w-full py-3 text-[13px] font-medium text-accent rounded-2xl glass shadow-card active:opacity-80 touch-manipulation select-none" onClick={() => setShowAll(true)} type="button">
             Показать ещё {tracks.length - MAX_VISIBLE} треков
           </button>
         )}
       </section>
 
       {isLoggedIn && (
-        <TrackList title="Мой плейлист" tracks={playlist} onSelect={playTrack} onRemove={handleRemove} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
+        <TrackList title="Мой плейлист" tracks={playlist} playlist={playlist} onSelect={playTrack} onRemove={handleRemove} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
       )}
 
       <MiniPlayer track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onOpen={() => setIsPlayerOpen(true)} onClose={handleCloseMiniPlayer} />
 
-      <FullPlayer isOpen={isPlayerOpen} track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} currentTime={currentTime} duration={duration} onClose={() => setIsPlayerOpen(false)} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onSeek={handleSeek} onAddAndSend={handleAddAndSend} isLoggedIn={isLoggedIn} />
+      {isPlayerOpen && (
+        <div className="fixed inset-0 z-40 bg-black/50 pointer-events-none" aria-hidden />
+      )}
+      <FullPlayer isOpen={isPlayerOpen} track={currentTrack} isPlaying={isPlaying} isBuffering={isBuffering} currentTime={currentTime} duration={duration} onClose={() => setIsPlayerOpen(false)} onToggle={togglePlay} onNext={handleNext} onPrev={handlePrev} onSeek={handleSeek} onAddAndSend={handleAddAndSend} onRemove={handleRemove} isLoggedIn={isLoggedIn} isInPlaylist={currentTrack ? playlist.some((t) => t.id === currentTrack.id) : false} />
 
       <audio ref={audioRef} preload="auto" playsInline />
     </div>

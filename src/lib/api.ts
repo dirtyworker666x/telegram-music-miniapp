@@ -132,6 +132,13 @@ export const resolveAudioUrl = async (trackId: string): Promise<string> => {
   return url;
 };
 
+/** Синхронно возвращает URL из кеша — мгновенный старт без запроса. */
+export const getCachedAudioUrl = (trackId: string): string | null => {
+  const cached = _urlCache.get(trackId);
+  if (cached && Date.now() - cached.ts < _URL_TTL) return cached.url;
+  return null;
+};
+
 /**
  * Предзагружает URL трека в кеш (fire & forget).
  */
@@ -190,7 +197,9 @@ export const fetchPlaylist = async (): Promise<Track[]> => {
   }
 };
 
-export const addToPlaylist = async (track: Track): Promise<boolean> => {
+export type AddToPlaylistResult = { ok: true; status: "saved" } | { ok: true; status: "already_exists" } | { ok: false };
+
+export const addToPlaylist = async (track: Track): Promise<AddToPlaylistResult> => {
   try {
     const resp = await fetchWithTimeout(`${API_BASE}/api/playlist`, {
       method: "POST",
@@ -200,8 +209,10 @@ export const addToPlaylist = async (track: Track): Promise<boolean> => {
         duration: track.duration ?? 0, cover_url: track.artwork ?? null,
       }),
     }, 8000);
-    return resp.ok;
-  } catch { return false; }
+    if (!resp.ok) return { ok: false };
+    const data = await resp.json().catch(() => ({}));
+    return { ok: true, status: data.status === "already_exists" ? "already_exists" : "saved" };
+  } catch { return { ok: false }; }
 };
 
 export const removeFromPlaylist = async (trackId: string): Promise<boolean> => {
@@ -220,7 +231,11 @@ export const sendToBot = async (trackId: string): Promise<boolean> => {
   try {
     const resp = await fetchWithTimeout(
       `${API_BASE}/api/send-to-bot/${encodeURIComponent(trackId)}`,
-      { method: "POST", headers: authHeaders() },
+      {
+        method: "POST",
+        headers: authHeaders(),
+        body: "{}",
+      },
       60000,
     );
     return resp.ok;

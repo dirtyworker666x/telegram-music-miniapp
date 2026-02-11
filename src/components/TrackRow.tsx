@@ -8,12 +8,13 @@ type TrackRowProps = {
   onAddAndSend?: (track: Track) => void | Promise<void>;
   onRemove?: (track: Track) => void;
   isLoggedIn?: boolean;
+  isInPlaylist?: boolean;
 };
 
-export const TrackRow = ({ track, onSelect, onAddAndSend, onRemove, isLoggedIn }: TrackRowProps) => {
+export const TrackRow = ({ track, onSelect, onAddAndSend, onRemove, isLoggedIn, isInPlaylist }: TrackRowProps) => {
   const [busy, setBusy] = useState(false);
 
-  const onBookmarkClick = async (e: React.MouseEvent) => {
+  const onAddClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onAddAndSend || busy) return;
     setBusy(true);
@@ -24,9 +25,12 @@ export const TrackRow = ({ track, onSelect, onAddAndSend, onRemove, isLoggedIn }
     }
   };
 
+  const showAdd = isLoggedIn && onAddAndSend && !isInPlaylist;
+  const showRemove = isLoggedIn && onRemove && isInPlaylist;
+
   return (
     <button
-      className="w-full flex items-center gap-3 p-3 rounded-2xl active:bg-white/30 dark:active:bg-white/5 transition-colors text-left"
+      className="w-full flex items-center gap-3 p-3 rounded-2xl active:bg-white/12 dark:active:bg-white/5 text-left touch-manipulation select-none"
       onClick={() => onSelect(track)}
       type="button"
     >
@@ -48,22 +52,26 @@ export const TrackRow = ({ track, onSelect, onAddAndSend, onRemove, isLoggedIn }
         <p className="text-[12px] text-text-muted line-clamp-1 mt-0.5">{track.artist}</p>
       </div>
       <div className="flex items-center shrink-0 gap-0.5">
-        {isLoggedIn && onAddAndSend ? (
+        {showAdd ? (
           <span
             role="button"
             tabIndex={0}
-            className={`p-2.5 rounded-xl active:bg-white/40 dark:active:bg-white/10 ${busy ? "opacity-60 pointer-events-none" : ""}`}
-            onClick={onBookmarkClick}
+            className={`p-2.5 rounded-xl active:bg-white/20 dark:active:bg-white/8 touch-manipulation select-none ${busy ? "opacity-60 pointer-events-none" : ""}`}
+            onClick={onAddClick}
             title="Добавить"
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBookmarkClick(e as unknown as React.MouseEvent); } }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onAddClick(e as unknown as React.MouseEvent); } }}
           >
             <Send className="h-[18px] w-[18px] text-text-muted" />
           </span>
         ) : null}
-        {onRemove ? (
+        {showRemove ? (
           <span
-            className="p-2.5 rounded-xl active:bg-white/40 dark:active:bg-white/10"
+            role="button"
+            tabIndex={0}
+            className="p-2.5 rounded-xl active:bg-white/20 dark:active:bg-white/8 touch-manipulation select-none"
             onClick={(e) => { e.stopPropagation(); onRemove(track); }}
+            title="Удалить"
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRemove(track); } }}
           >
             <Trash2 className="h-[18px] w-[18px] text-text-muted" />
           </span>

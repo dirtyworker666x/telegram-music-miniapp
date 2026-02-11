@@ -1,5 +1,5 @@
 #!/bin/bash
-# Один раз: установка зависимостей для бэкенда и фронта
+# Один раз: установка зависимостей, туннеля и .env
 set -e
 cd "$(dirname "$0")/.."
 
@@ -15,8 +15,31 @@ if [ ! -d "venv" ]; then
 fi
 source venv/bin/activate
 pip install -r requirements.txt
+cd ..
 echo ""
+
+echo "=== 3. Туннель (cloudflared) ==="
+if ! command -v cloudflared &>/dev/null; then
+  if command -v brew &>/dev/null; then
+    echo "Устанавливаю cloudflared..."
+    brew install cloudflared
+  else
+    echo "⚠ cloudflared не найден. Установи: brew install cloudflared (или будет localhost.run)"
+  fi
+else
+  echo "cloudflared уже установлен"
+fi
+echo ""
+
+echo "=== 4. .env ==="
+if [ ! -f backend/.env ]; then
+  cp backend/.env.example backend/.env
+  echo "Создан backend/.env — вставь BOT_TOKEN и VK_TOKEN из START_HERE.md"
+else
+  echo "backend/.env уже есть"
+fi
+echo ""
+
 echo "Готово. Дальше:"
-echo "  1. Настрой backend/.env (токены Telegram и VK — см. START_HERE.md)"
-echo "  2. Запусти MongoDB (если ещё не запущен)"
-echo "  3. Запусти скрипты: ./scripts/start-backend.sh  и  ./scripts/start-frontend.sh"
+echo "  1. Вставь токены в backend/.env (BOT_TOKEN, VK_TOKEN)"
+echo "  2. npm run start  — всё поднимется"

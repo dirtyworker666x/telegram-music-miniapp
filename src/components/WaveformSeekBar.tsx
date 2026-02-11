@@ -18,7 +18,7 @@ type WaveformSeekBarProps = {
 const BAR_COUNT = 80;
 const BAR_MIN = 0.08;
 const BAR_MAX = 1.0;
-const CANVAS_HEIGHT = 80;
+const CANVAS_HEIGHT = 116;
 const BAR_WIDTH_RATIO = 0.6; // ширина бара от слота (остальное — зазор)
 // Наши цвета: верх баров
 const PLAYED_COLOR = "rgba(0, 136, 204, 1)";
@@ -170,6 +170,10 @@ export const WaveformSeekBar = memo(({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const intentRef = useRef<"none" | "horizontal" | "vertical">("none");
+  const startRef = useRef({ x: 0, y: 0 });
+  const lastProgressRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0, cw: 0, ch: 0 });
   const [localProgress, setLocalProgress] = useState<number | null>(null);
   const waveformRef = useRef<Float32Array>(getWaveform(trackId));
   const rafRef = useRef<number>(0);
@@ -196,13 +200,17 @@ export const WaveformSeekBar = memo(({
     const rect = container.getBoundingClientRect();
     const w = rect.width;
     const h = CANVAS_HEIGHT;
-
     const cw = Math.round(w * dpr);
     const ch = Math.round(h * dpr);
-    canvas.width = cw;
-    canvas.height = ch;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
+
+    const prev = sizeRef.current;
+    if (prev.w !== w || prev.h !== h || prev.cw !== cw || prev.ch !== ch) {
+      sizeRef.current = { w, h, cw, ch };
+      canvas.width = cw;
+      canvas.height = ch;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+    }
 
     drawWaveform(ctx, waveformRef.current, Math.min(Math.max(progress, 0), 1), w, h, dpr);
   }, [progress, trackId]);
@@ -221,6 +229,7 @@ export const WaveformSeekBar = memo(({
     draggingRef.current = true;
     onSeekStart();
     const p = getProgressFromEvent(clientX);
+    lastProgressRef.current = p;
     setLocalProgress(p);
     if (duration > 0) onSeekMove(p * duration);
   }, [getProgressFromEvent, onSeekStart, onSeekMove, duration]);
@@ -228,6 +237,7 @@ export const WaveformSeekBar = memo(({
   const handleMove = useCallback((clientX: number) => {
     if (!draggingRef.current) return;
     const p = getProgressFromEvent(clientX);
+    lastProgressRef.current = p;
     setLocalProgress(p);
     if (duration > 0) onSeekMove(p * duration);
   }, [getProgressFromEvent, onSeekMove, duration]);
@@ -235,26 +245,47 @@ export const WaveformSeekBar = memo(({
   const handleEnd = useCallback(() => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
-    if (localProgress !== null && duration > 0) {
-      onSeekEnd(localProgress * duration);
+    if (duration > 0) {
+      onSeekEnd(lastProgressRef.current * duration);
     }
     setLocalProgress(null);
-  }, [localProgress, duration, onSeekEnd]);
+  }, [duration, onSeekEnd]);
 
-  // Touch events
+  // Touch events — вертикальный свайп отдаём родителю (FullPlayer), горизонтальный — для seek
   const onTouchStart = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
-    handleStart(e.touches[0].clientX);
-  }, [handleStart]);
+    const t = e.touches[0];
+    startRef.current = { x: t.clientX, y: t.clientY };
+    intentRef.current = "none";
+    // Не preventDefault — решаем на первом move
+  }, []);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
-    handleMove(e.touches[0].clientX);
-  }, [handleMove]);
+    const t = e.touches[0];
+    const dx = Math.abs(t.clientX - startRef.current.x);
+    const dy = Math.abs(t.clientY - startRef.current.y);
+
+    if (intentRef.current === "none" && (dx > 8 || dy > 8)) {
+      intentRef.current = dy > dx * 1.2 ? "vertical" : "horizontal";
+      if (intentRef.current === "horizontal") {
+        handleStart(startRef.current.x);
+      }
+    }
+
+    if (intentRef.current === "vertical") {
+      return; // не перехватываем — пусть родитель (FullPlayer) обрабатывает свайп
+    }
+    if (intentRef.current === "horizontal") {
+      e.preventDefault();
+      handleMove(t.clientX);
+    }
+  }, [handleStart, handleMove]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
-    handleEnd();
+    if (intentRef.current === "horizontal") {
+      e.preventDefault();
+      handleEnd();
+    }
+    intentRef.current = "none";
   }, [handleEnd]);
 
   // Mouse events
@@ -289,8 +320,8 @@ export const WaveformSeekBar = memo(({
   return (
     <div
       ref={containerRef}
-      className="w-full relative cursor-pointer select-none"
-      style={{ height: CANVAS_HEIGHT, touchAction: "none" }}
+      className="w-full relative cursor-pointer select-none touch-manipulation"
+      style={{ height: CANVAS_HEIGHT, touchAction: "pan-x", contain: "paint", backfaceVisibility: "hidden" }}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -298,7 +329,7 @@ export const WaveformSeekBar = memo(({
     >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0"
+        className="absolute inset-0 block"
         style={{ width: "100%", height: CANVAS_HEIGHT }}
       />
       {/* Прямоугольник времени по центру (как в SoundCloud) */}

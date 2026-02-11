@@ -51,7 +51,7 @@ export const MiniPlayer = ({
         >
           <div className="glass rounded-3xl shadow-card px-4 py-3 flex items-center gap-3">
             <button
-              className="flex items-center gap-2.5 flex-1 min-w-0"
+              className="flex items-center gap-2.5 flex-1 min-w-0 touch-manipulation select-none"
               onClick={onOpen}
               type="button"
             >
@@ -68,20 +68,20 @@ export const MiniPlayer = ({
               </div>
             </button>
             <div className="flex items-center shrink-0 gap-0.5">
-              <button className="p-2 rounded-full active:bg-white/30 text-accent" onClick={onPrev} type="button">
+              <button className="p-2 rounded-full active:opacity-80 text-accent touch-manipulation select-none" onClick={onPrev} type="button">
                 <SkipBack className="h-5 w-5" />
               </button>
               <button
-                className="h-11 w-11 rounded-full bg-transparent text-accent flex items-center justify-center active:bg-white/20"
+                className="h-11 w-11 rounded-full bg-transparent text-accent flex items-center justify-center active:opacity-80 touch-manipulation select-none"
                 onClick={isBuffering ? undefined : onToggle}
                 type="button"
               >
                 <PlayIcon />
               </button>
-              <button className="p-2 rounded-full active:bg-white/30 text-accent" onClick={onNext} type="button">
+              <button className="p-2 rounded-full active:opacity-80 text-accent touch-manipulation select-none" onClick={onNext} type="button">
                 <SkipForward className="h-5 w-5" />
               </button>
-              <button className="p-2 rounded-full active:bg-white/30 ml-0.5 text-text-muted" onClick={onClose} type="button">
+              <button className="p-2 rounded-full active:opacity-80 ml-0.5 text-text-muted touch-manipulation select-none" onClick={onClose} type="button">
                 <X className="h-4 w-4" />
               </button>
             </div>

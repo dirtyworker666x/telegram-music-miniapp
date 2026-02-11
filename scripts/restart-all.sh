@@ -10,8 +10,10 @@ echo "🛑 Останавливаю все процессы..."
 pkill -9 -f "python.*bot.py" 2>/dev/null || true
 pkill -9 -f "server_lite.py" 2>/dev/null || true
 pkill -9 -f "tunnel-watchdog.sh" 2>/dev/null || true
-pkill -9 -f "ssh.*localhost.run" 2>/dev/null || true
+pkill -9 -f "ssh.*localhost" 2>/dev/null || true
+pkill -9 -f "cloudflared.*tunnel" 2>/dev/null || true
 pkill -9 -f "ssh.*lhr" 2>/dev/null || true
+pkill -9 -f "ssh.*nokey" 2>/dev/null || true
 pkill -9 -f "ssh.*8787" 2>/dev/null || true
 rm -f backend/bot.lock .tunnel-watchdog.lock
 
@@ -40,7 +42,7 @@ free_port
 echo "✅ Порт $PORT свободен"
 
 echo "▶️ Запуск бэкенда на порту $PORT..."
-(cd backend && source venv/bin/activate && python server_lite.py) &
+(cd backend && source venv/bin/activate && APP_PORT=$PORT python server_lite.py) &
 BACKEND_PID=$!
 sleep 4
 if ! kill -0 $BACKEND_PID 2>/dev/null; then
@@ -49,5 +51,5 @@ if ! kill -0 $BACKEND_PID 2>/dev/null; then
 fi
 echo "✅ Бэкенд запущен (PID $BACKEND_PID)"
 
-echo "▶️ Запуск туннеля и бота..."
+echo "▶️ Запуск туннеля и бота (cloudflared по умолчанию)..."
 exec ./tunnel-watchdog.sh

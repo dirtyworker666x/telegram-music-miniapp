@@ -17,10 +17,9 @@ export const useHlsAudio = (
 
     let cancelled = false;
 
-    // Устанавливаем src и СРАЗУ вызываем play().
-    // play() вернёт rejected promise (нет данных), но браузер
-    // запоминает intent to play и показывает Pause в пуше.
-    // Когда данные придут — canplay → play() сработает.
+    // Жёсткий сброс: устраняет "бегунок 2 сек вперёд → откат" — браузер мог
+    // отдать старый currentTime/duration до полной загрузки нового src.
+    audio.currentTime = 0;
     audio.src = url;
 
     // Сразу play() — ключ к правильной иконке в пуше

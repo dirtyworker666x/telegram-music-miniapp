@@ -11,7 +11,7 @@ export const LoadingState = () => {
             <div className="h-3 w-1/2 rounded-full bg-white/60 dark:bg-white/10" />
             <div className="h-3 w-1/3 rounded-full bg-white/40 dark:bg-white/5" />
           </div>
-          <div className="absolute inset-0 animate-shimmer bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+          <div className="absolute inset-0 animate-shimmer bg-gradient-to-r from-transparent via-white/15 to-transparent pointer-events-none" />
         </div>
       ))}
     </div>

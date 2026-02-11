@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# ─── TGPlay Tunnel Watchdog v8 ──────────────────────────────
-# Один экземпляр (lock), один бот, туннель localhost.run → backend:8787
+# ─── TGPlay Tunnel Watchdog v10 ──────────────────────────────
+# По умолчанию: localhost.run (стабильнее). TUNNEL_PROVIDER=cloudflared — для Cloudflare
 set -euo pipefail
 
 PORT=8787
-CHECK_INTERVAL=20
-KEEPALIVE_INTERVAL=15
+CHECK_INTERVAL=15
+KEEPALIVE_INTERVAL=10
 RESTART_COOLDOWN=5
-MAX_FAILURES=2
+MAX_FAILURES=3
+TUNNEL_TYPE=""  # cloudflared | localhost
 SSH_KEY="${HOME}/.ssh/id_ed25519_tunnel"
 ENV_FILE="$(cd "$(dirname "$0")" && pwd)/backend/.env"
 LOG_FILE="$(cd "$(dirname "$0")" && pwd)/tunnel.log"
@@ -63,21 +64,34 @@ cleanup() {
 }
 
 # ─── Extract URL from tunnel output ─────────────────────────
-extract_url() {
+extract_url_localhost() {
   local file="$1"
-  # Try JSON output first, then plain text
-  if command -v python3 &>/dev/null; then
-    python3 -c "
-import sys, re
+  python3 -c "
+import sys, re, json
 with open('$file', 'r', errors='ignore') as f:
     text = f.read()
-urls = re.findall(r'https://[a-z0-9]+\.lhr\.life', text)
+for line in text.splitlines():
+    line = line.strip()
+    if not line.startswith('{'):
+        continue
+    try:
+        d = json.loads(line)
+        if d.get('event') == 'tcpip-forward' and d.get('address'):
+            addr = d['address'].strip()
+            if addr and addr.endswith('.lhr.life') and 'admin' not in addr.lower():
+                print('https://' + addr)
+                sys.exit(0)
+    except Exception:
+        pass
+urls = re.findall(r'https://([a-z0-9]{12,}\.lhr\.life)', text)
 if urls:
-    print(urls[-1])
+    print('https://' + urls[-1])
 " 2>/dev/null
-  else
-    strings "$file" 2>/dev/null | grep -oE 'https://[a-z0-9]+\.lhr\.life' | tail -1
-  fi
+}
+
+extract_url_cloudflared() {
+  local file="$1"
+  grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$file" 2>/dev/null | head -1
 }
 
 # ─── Update WEBAPP_URL in .env ───────────────────────────────
@@ -139,66 +153,71 @@ start_keepalive() {
   KEEPALIVE_PID=$!
 }
 
-# ─── Start tunnel ────────────────────────────────────────────
+# ─── Start tunnel (cloudflared приоритет, fallback localhost.run) ───
 start_tunnel() {
-  pkill -f "ssh.*localhost.run" 2>/dev/null || true
+  pkill -f "ssh.*localhost" 2>/dev/null || true
+  pkill -f "ssh.*nokey" 2>/dev/null || true
+  pkill -f "cloudflared.*tunnel" 2>/dev/null || true
   [[ -n "$TUNNEL_PID" ]] && kill "$TUNNEL_PID" 2>/dev/null
   TUNNEL_PID=""
   sleep 2
 
-  log "Starting tunnel → localhost:$PORT ..."
   local tmp
   tmp=$(mktemp)
-  local ssh_cmd
-  if [[ -f "$SSH_KEY" ]]; then
-    ssh_cmd="ssh -i $SSH_KEY"
-  else
-    warn "SSH key not found ($SSH_KEY), using default"
-    ssh_cmd="ssh"
-  fi
-  $ssh_cmd \
-      -o StrictHostKeyChecking=no \
-      -o ServerAliveInterval=10 \
-      -o ServerAliveCountMax=3 \
-      -o ConnectTimeout=20 \
-      -o TCPKeepAlive=yes \
-      -o ExitOnForwardFailure=yes \
-      -R 80:localhost:$PORT \
-      ssh.localhost.run \
-      > "$tmp" 2>&1 &
-  TUNNEL_PID=$!
 
-  # Wait for URL (up to 25s)
+  # localhost.run по умолчанию (Cloudflare quick tunnel даёт 1033). TUNNEL_PROVIDER=cloudflared — принудительно cloudflared
+  if [[ "${TUNNEL_PROVIDER:-}" == "cloudflared" ]] && command -v cloudflared &>/dev/null; then
+    log "Starting cloudflared tunnel → 127.0.0.1:$PORT ..."
+    TUNNEL_TYPE="cloudflared"
+    cloudflared tunnel --url "http://127.0.0.1:$PORT" > "$tmp" 2>&1 &
+    TUNNEL_PID=$!
+  else
+    TUNNEL_TYPE="localhost"
+    log "Starting localhost.run tunnel → 127.0.0.1:$PORT ..."
+    local ssh_args="-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+    ssh_args="$ssh_args -o ConnectTimeout=25 -o TCPKeepAlive=yes -o ExitOnForwardFailure=yes"
+    ssh_args="$ssh_args -R 80:127.0.0.1:$PORT"
+    if [[ -f "$SSH_KEY" ]]; then
+      ssh -i "$SSH_KEY" $ssh_args localhost.run -- --output json > "$tmp" 2>&1 &
+    else
+      ssh $ssh_args nokey@localhost.run -- --output json > "$tmp" 2>&1 &
+    fi
+    TUNNEL_PID=$!
+  fi
+
+  # Wait for URL (cloudflared медленнее — до 45s)
   local wait=0
-  while [[ $wait -lt 25 ]]; do
-    # Check if process died
+  local url=""
+  local max_wait=45
+  while [[ $wait -lt $max_wait ]]; do
     if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
       err "Tunnel process died during startup"
       TUNNEL_PID=""
       rm -f "$tmp"
       return 1
     fi
-    
-    local url
-    url=$(extract_url "$tmp")
+    if [[ "$TUNNEL_TYPE" == "cloudflared" ]]; then
+      url=$(extract_url_cloudflared "$tmp")
+    else
+      url=$(extract_url_localhost "$tmp")
+    fi
     if [[ -n "$url" ]]; then
       set_webapp_url "$url"
       rm -f "$tmp"
-      
-      # Start keep-alive pinger
+      if [[ "$TUNNEL_TYPE" == "cloudflared" ]]; then
+        log "Cloudflare tunnel established, waiting 8s for routing..."
+        sleep 8
+      fi
       start_keepalive
-      
-      # Restart bot with new URL
       restart_bot
-      
-      ok "Tunnel UP: $CURRENT_URL (PID $TUNNEL_PID)"
+      ok "Tunnel UP ($TUNNEL_TYPE): $CURRENT_URL (PID $TUNNEL_PID)"
       return 0
     fi
     sleep 1
     ((wait++))
   done
 
-  err "Tunnel failed to produce URL within 25s"
+  err "Tunnel failed to produce URL within ${max_wait}s"
   kill "$TUNNEL_PID" 2>/dev/null
   TUNNEL_PID=""
   rm -f "$tmp"
@@ -207,16 +226,13 @@ start_tunnel() {
 
 # ─── Health check ────────────────────────────────────────────
 check_tunnel() {
-  # 1. Process alive?
   if [[ -z "$TUNNEL_PID" ]] || ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
     err "Tunnel process not running"
     return 1
   fi
-  
-  # 2. HTTP check (short timeout)
   if [[ -n "$CURRENT_URL" ]]; then
     local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "$CURRENT_URL/api/status" 2>/dev/null || echo "000")
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 12 "$CURRENT_URL/api/status" 2>/dev/null || echo "000")
     if [[ "$code" == "200" ]]; then
       return 0
     else
@@ -231,21 +247,31 @@ check_tunnel() {
 # ─── Main loop ───────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   TGPlay Tunnel Watchdog v8             ║${NC}"
+echo -e "${CYAN}║   TGPlay Tunnel Watchdog v10            ║${NC}"
 echo -e "${CYAN}║   Keep-alive: ${KEEPALIVE_INTERVAL}s | Check: ${CHECK_INTERVAL}s          ║${NC}"
 echo -e "${CYAN}║   Max users: 50+ | Auto-restart: ON      ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
 failures=0
+cloudflared_failures=0
+CLOUDFLARED_FALLBACK_THRESHOLD=3
 
 while true; do
   # Start tunnel if not running
   if [[ -z "$TUNNEL_PID" ]] || ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
     TUNNEL_PID=""
+    # Fallback на localhost.run при повторных падениях cloudflared (TLS/сеть)
+    if [[ $cloudflared_failures -ge $CLOUDFLARED_FALLBACK_THRESHOLD ]]; then
+      log "Cloudflare failed $cloudflared_failures times → switching to localhost.run"
+      export TUNNEL_PROVIDER=localhost
+      cloudflared_failures=0
+    fi
     if start_tunnel; then
       failures=0
+      cloudflared_failures=0
     else
+      [[ "$TUNNEL_TYPE" == "cloudflared" ]] && ((cloudflared_failures++))
       err "Failed to start tunnel, retrying in ${RESTART_COOLDOWN}s..."
       sleep "$RESTART_COOLDOWN"
       continue

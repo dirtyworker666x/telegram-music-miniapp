@@ -67,47 +67,41 @@ async def set_bot_commands(session: aiohttp.ClientSession):
     print("✅ Bot commands set")
 
 
+_processed_updates: set[int] = set()
+_MAX_PROCESSED = 500
+
+
 async def handle_update(session: aiohttp.ClientSession, update: dict):
     """Обрабатывает входящее обновление."""
+    update_id = update.get("update_id")
+    if update_id in _processed_updates:
+        return
+    _processed_updates.add(update_id)
+    if len(_processed_updates) > _MAX_PROCESSED:
+        _processed_updates.clear()
+
     message = update.get("message")
     if not message:
         return
 
-    chat_id = message["chat"]["id"]
-    text = message.get("text", "")
-    first_name = message.get("from", {}).get("first_name", "друг")
+    chat_id = message.get("chat", {}).get("id")
+    if not chat_id:
+        return
 
-    if text == "/start":
+    text = (message.get("text") or "").strip()
+    if text.startswith("/start") or text.startswith("/playlist"):
+        # Отправляем сообщение с кнопкой открытия Mini App
         await tg_request(
             session,
             "sendMessage",
             chat_id=chat_id,
-            text=(
-                f"👋 Привет, {first_name}!\n\n"
-                "🎵 <b>TGPlay</b> — плеер в Telegram.\n\n"
-                f"▶️ <a href=\"{WEBAPP_URL}\">Открыть плеер</a>\n\n"
-                "Если кнопка пишет «тоннель не работает» — отправь <b>/start</b> ещё раз: придёт новая ссылка. "
-                "Или открой через кнопку меню слева от поля ввода 👇"
-            ),
-            parse_mode="HTML",
+            text="🎵 TGPlay — музыкальный плеер\n\nНажми кнопку ниже, чтобы открыть:",
             reply_markup={
                 "inline_keyboard": [
                     [{"text": "🎵 Открыть плеер", "web_app": {"url": WEBAPP_URL}}],
-                ]
+                ],
             },
         )
-        print(f"📩 /start from {first_name} (chat_id={chat_id})")
-
-    elif text == "/playlist":
-        await tg_request(
-            session,
-            "sendMessage",
-            chat_id=chat_id,
-            text=f"📋 <a href=\"{WEBAPP_URL}\">Открыть плеер</a> — там плейлист.",
-            parse_mode="HTML",
-            reply_markup={"inline_keyboard": [[{"text": "📋 Открыть плеер", "web_app": {"url": WEBAPP_URL}}]]},
-        )
-        print(f"📩 /playlist from {first_name} (chat_id={chat_id})")
 
 
 async def poll_updates(session: aiohttp.ClientSession):

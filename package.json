@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "npm run build && chmod +x tunnel-watchdog.sh scripts/restart-all.sh 2>/dev/null; exec ./scripts/restart-all.sh",
+    "tunnel": "npm run start",
+    "run": "npm run tunnel"
   },
   "dependencies": {
     "@twa-dev/sdk": "^7.10.1",

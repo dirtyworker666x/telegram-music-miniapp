@@ -578,8 +578,9 @@ async def _download_direct(url: str) -> Optional[bytes]:
             if "mpegurl" in ct.lower() or "m3u8" in ct.lower():
                 return None
             data = await resp.read()
-            # Проверяем что это аудио (не HTML ошибка)
-            if len(data) < 10000:
+            if len(data) < 500:
+                return None
+            if data[:3] == b"<! " or data[:5] == b"<html":
                 return None
             return data
     except Exception:
@@ -706,7 +707,8 @@ async def _send_track_to_telegram(chat_id: int, track_id: str) -> None:
     form.add_field("chat_id", str(chat_id))
     form.add_field("title", title)
     form.add_field("performer", artist)
-    form.add_field("audio", mp3_data, filename=f"{artist} - {title}.mp3", content_type="audio/mpeg")
+    safe_name = re.sub(r'[^\w\s\-\.]', ' ', f"{artist} - {title}")[:80].strip() or "track"
+    form.add_field("audio", mp3_data, filename=f"{safe_name}.mp3", content_type="audio/mpeg")
 
     try:
         async with session.post(tg_url, data=form) as resp:
@@ -717,10 +719,19 @@ async def _send_track_to_telegram(chat_id: int, track_id: str) -> None:
 
     if not result.get("ok"):
         desc = result.get("description", "Unknown error")
-        print(f"⚠️ [bg] Telegram error: {desc}")
+        err_code = result.get("error_code", "?")
+        print(f"⚠️ [bg] Telegram API error {err_code}: {desc}")
         return
 
     print(f"✅ [bg] Sent to chat {chat_id}")
+
+
+async def _run_send_to_telegram(chat_id: int, track_id: str):
+    """Обёртка для логирования ошибок фоновой задачи."""
+    try:
+        await _send_track_to_telegram(chat_id, track_id)
+    except Exception as e:
+        print(f"⚠️ [bg] send-to-bot failed: {e}")
 
 
 @app.post("/api/send-to-bot/{track_id}")
@@ -738,10 +749,9 @@ async def send_to_bot(
         raise HTTPException(400, "Invalid track ID format")
 
     if background is None:
-        # fallback (не должен срабатывать, но на всякий случай)
-        asyncio.create_task(_send_track_to_telegram(chat_id, track_id))
+        asyncio.create_task(_run_send_to_telegram(chat_id, track_id))
     else:
-        background.add_task(_send_track_to_telegram, chat_id, track_id)
+        background.add_task(_run_send_to_telegram, chat_id, track_id)
 
     return {"status": "queued", "chat_id": chat_id}
 
