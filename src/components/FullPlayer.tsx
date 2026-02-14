@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, Pause, Play, Send, SkipBack, SkipForward, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { ChevronDown, Loader2, Pause, Play, Send, SkipBack, SkipForward, Trash2 } from "lucide-react";
+import { useCallback } from "react";
 import type { Track } from "../types";
 import { WaveformSeekBar } from "./WaveformSeekBar";
 
@@ -43,27 +43,9 @@ export const FullPlayer = ({
   isLoggedIn,
   isInPlaylist,
 }: FullPlayerProps) => {
-  const [dragging, setDragging] = useState(false);
-  const [dragTime, setDragTime] = useState(0);
-  const [maxDragY, setMaxDragY] = useState(1200);
-  const displayTime = dragging ? dragTime : currentTime;
-
-  useEffect(() => {
-    setMaxDragY(typeof window !== "undefined" ? window.innerHeight : 1200);
-  }, []);
-
-  const onWaveSeekStart = useCallback(() => {
-    setDragging(true);
-    setDragTime(currentTime);
-  }, [currentTime]);
-
-  const onWaveSeekMove = useCallback((time: number) => {
-    setDragTime(time);
-  }, []);
-
+  const onWaveSeekStart = useCallback(() => {}, []);
+  const onWaveSeekMove = useCallback(() => {}, []);
   const onWaveSeekEnd = useCallback((time: number) => {
-    setDragging(false);
-    setDragTime(time);
     onSeek(time);
   }, [onSeek]);
 
@@ -87,19 +69,12 @@ export const FullPlayer = ({
             padding: 0,
             backdropFilter: "blur(40px)",
             WebkitBackdropFilter: "blur(40px)",
-            touchAction: "none",
+            touchAction: "pan-x",
           }}
           initial={{ y: "100%" }}
           animate={{ y: 0 }}
           exit={{ y: "100%" }}
           transition={{ type: "spring", damping: 28, stiffness: 300 }}
-          drag="y"
-          dragConstraints={{ top: 0, bottom: maxDragY }}
-          dragElastic={{ top: 0.1, bottom: 0.3 }}
-          dragTransition={{ bounceStiffness: 400, bounceDamping: 40 }}
-          onDragEnd={(_e, info) => {
-            if (info.offset.y > 80 || info.velocity.y > 350) onClose();
-          }}
         >
           <div className="relative flex-1 overflow-hidden flex flex-col">
             {/* Размытый фон обложки */}
@@ -124,14 +99,24 @@ export const FullPlayer = ({
                 paddingBottom: "max(16px, env(safe-area-inset-bottom))",
               }}
             >
-              {/* Хедер — иконка и текст вместе по центру */}
-              <div className="flex items-center justify-center flex-shrink-0 py-1" style={{ gap: 0 }}>
-                <img
-                  src="/icon.png"
-                  alt=""
-                  className="w-11 h-11 object-contain opacity-50 shrink-0 -mr-2"
-                />
-                <div className="text-[11px] text-white/50 font-medium uppercase tracking-[0.15em]">TGPlay</div>
+              {/* Хедер — кнопка закрытия слева, иконка и текст по центру */}
+              <div className="relative flex items-center justify-center flex-shrink-0 py-1">
+                <button
+                  onClick={onClose}
+                  className="absolute left-0 p-2 -ml-2 rounded-full text-white/70 hover:text-white active:opacity-80 border-0 touch-manipulation"
+                  type="button"
+                  aria-label="Закрыть"
+                >
+                  <ChevronDown className="h-7 w-7" />
+                </button>
+                <div className="flex items-center justify-center" style={{ gap: 0 }}>
+                  <img
+                    src="/icon.png"
+                    alt=""
+                    className="w-11 h-11 object-contain opacity-50 shrink-0 -mr-2"
+                  />
+                  <div className="text-[11px] text-white/50 font-medium uppercase tracking-[0.15em]">TGPlay</div>
+                </div>
               </div>
 
               {/* Обложка и название — отступ снизу чтобы дорожка не залезала */}
@@ -158,7 +143,7 @@ export const FullPlayer = ({
                 <div className="w-full -mx-2">
                   <WaveformSeekBar
                     trackId={track.id}
-                    currentTime={displayTime}
+                    currentTime={currentTime}
                     duration={duration}
                     onSeekStart={onWaveSeekStart}
                     onSeekMove={onWaveSeekMove}

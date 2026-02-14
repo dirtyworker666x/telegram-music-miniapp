@@ -272,7 +272,8 @@ export const WaveformSeekBar = memo(({
     }
 
     if (intentRef.current === "vertical") {
-      return; // не перехватываем — пусть родитель (FullPlayer) обрабатывает свайп
+      e.preventDefault(); // вертикальный свайп — блокируем, не закрываем плеер
+      return;
     }
     if (intentRef.current === "horizontal") {
       e.preventDefault();
